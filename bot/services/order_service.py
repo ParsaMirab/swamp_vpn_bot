@@ -210,5 +210,5 @@ class OrderService:
             return text + "❌ سفارش شما رد شده است."
         if order.status == OrderService.approved:
             config_text = escape(order.config_text or "")
-            return text + f"✅ سفارش تایید شده است.\n\nکانفیگ:\n\n{config_text}"
+        return text + f"✅ سفارش تایید شده است.\n\nکانفیگ:\n\n<code>{escape(config_text)}</code>"
         return text

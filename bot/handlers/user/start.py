@@ -357,7 +357,7 @@ def _plan_details_text(
         return (
             f"نوع سرویس: {escape(service_name)}\n\n"
             f"حجم: {escape(plan_name)}\n"
-            "⏰ مدت: نامحدود\n\n"
+            "⏰ مدت: 30 روزه\n\n"
             "قیمت این سرویس:\n\n"
             f"{original_price:,} تومان"
         )
@@ -365,7 +365,7 @@ def _plan_details_text(
     return (
         f"نوع سرویس: {escape(service_name)}\n\n"
         f"حجم: {escape(plan_name)}\n"
-        "⏰ مدت: نامحدود\n\n"
+        "⏰ مدت: 30 روزه\n\n"
         "قیمت قبلی:\n"
         f"<s>{original_price:,} تومان</s>\n\n"
         "✅ قیمت بعد از تخفیف:\n"
@@ -381,17 +381,17 @@ def _invoice_text(
     owner_name: str,
 ) -> str:
     return (
-        "فاکتور سفارش\n\n"
-        "سرویس:\n"
+        "🧾 <b>فاکتور سفارش</b>\n\n"
+        "🌐 <b>سرویس:</b>\n"
         f"{escape(service_name)}\n\n"
-        "پلن:\n"
+        "💎 <b>پلن:</b>\n"
         f"{escape(plan_name)}\n\n"
-        "مبلغ قابل پرداخت:\n"
-        f"{final_price:,} تومان\n\n"
-        "لطفاً مبلغ را به شماره کارت زیر واریز کنید:\n\n"
-        f"{escape(card_number)}\n"
-        f"{escape(owner_name)}\n\n"
-        "سپس تصویر فیش واریزی را ارسال نمایید."
+        "💰 <b>مبلغ قابل پرداخت:</b>\n"
+        f"<b>{final_price:,}</b> تومان\n\n"
+        "💳 <b>لطفاً مبلغ را به شماره کارت زیر واریز کنید:</b>\n\n"
+        f"<code>{escape(card_number)}</code>\n"
+        f"👤 {escape(owner_name)}\n\n"
+        "📸 سپس تصویر فیش واریزی را ارسال نمایید."
     )
 
 

@@ -134,7 +134,7 @@ async def approve_order_finish(message: Message, state: FSMContext, bot: Bot) ->
             text=(
                 "✅ سفارش شما تایید شد.\n\n"
                 "کانفیگ شما:\n\n"
-                f"{escape(order.config_text or '')}\n\n"
+                f"<code>{escape(order.config_text or '')}</code>\n\n"
                 "از بخش «سفارش‌های من» می‌توانید مجدداً آن را مشاهده کنید."
             ),
         )
