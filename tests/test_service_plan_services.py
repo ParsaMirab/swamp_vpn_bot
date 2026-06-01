@@ -60,6 +60,24 @@ class ServicePlanServicesTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(deleted)
         self.assertEqual(await PlanService.list_plans(service.id), [])
 
+    async def test_service_delete_removes_related_orders(self) -> None:
+        service = await ServiceService.create_service("VPN")
+        plan = await PlanService.create_plan(service_id=service.id, name="100 GB", price=250000)
+        order = await OrderService.create_order(
+            user_id=123456789,
+            service_id=service.id,
+            plan_id=plan.id,
+            original_price=250000,
+            final_price=250000,
+            receipt_file_id="telegram-file-id",
+        )
+
+        deleted = await ServiceService.delete_service(service.id)
+
+        self.assertTrue(deleted)
+        self.assertIsNone(await OrderService.get_order(order.id))
+        self.assertEqual(await PlanService.list_plans(service.id), [])
+
     async def test_bank_card_create_list_delete(self) -> None:
         card = await BankCardService.create_card(
             card_number="6037 9999 9999 1234",

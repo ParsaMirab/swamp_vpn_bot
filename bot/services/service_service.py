@@ -1,8 +1,7 @@
-from sqlalchemy import select
-from sqlalchemy.orm import selectinload
+from sqlalchemy import delete, select
 
 from bot.database.base import async_session_factory
-from bot.database.models import Service
+from bot.database.models import Order, Plan, Service
 
 
 class ServiceService:
@@ -31,16 +30,13 @@ class ServiceService:
     @staticmethod
     async def delete_service(service_id: int) -> bool:
         async with async_session_factory() as session:
-            result = await session.execute(
-                select(Service)
-                .options(selectinload(Service.plans))
-                .where(Service.id == service_id)
-            )
-            service = result.scalar_one_or_none()
+            service = await session.get(Service, service_id)
             if service is None:
                 return False
 
-            await session.delete(service)
+            await session.execute(delete(Order).where(Order.service_id == service_id))
+            await session.execute(delete(Plan).where(Plan.service_id == service_id))
+            await session.execute(delete(Service).where(Service.id == service_id))
             await session.commit()
             return True
 
