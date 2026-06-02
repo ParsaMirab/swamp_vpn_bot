@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from html import escape
+from math import ceil
 
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import selectinload
@@ -10,11 +12,36 @@ from bot.database.base import async_session_factory
 from bot.database.models import Order
 
 
+@dataclass(frozen=True)
+class OrderPage:
+    orders: list[Order]
+    total_count: int
+    page: int
+    page_count: int
+    page_size: int
+    status: str | None = None
+    requested_page: int = 1
+
+    @property
+    def is_out_of_range(self) -> bool:
+        return self.requested_page != self.page
+
+
 class OrderService:
     pending = "pending"
     approved = "approved"
     rejected = "rejected"
-    page_size = 8
+    page_size = 10
+    filter_all = "all"
+    filter_approved = "approved"
+    filter_pending = "pending"
+    filter_rejected = "rejected"
+    order_filters = {
+        filter_all: None,
+        filter_approved: approved,
+        filter_pending: pending,
+        filter_rejected: rejected,
+    }
 
     @staticmethod
     async def create_order(
@@ -79,11 +106,27 @@ class OrderService:
 
     @staticmethod
     async def list_orders(page: int = 1) -> tuple[list[Order], int]:
+        order_page = await OrderService.list_orders_paged(OrderService.filter_all, page)
+        return order_page.orders, order_page.total_count
+
+    @staticmethod
+    async def list_orders_paged(order_filter: str = filter_all, page: int = 1) -> OrderPage:
+        status = OrderService.order_filters.get(order_filter)
+        requested_page = page
         normalized_page = max(page, 1)
         async with async_session_factory() as session:
-            count_result = await session.execute(select(func.count(Order.id)))
+            count_query = select(func.count(Order.id))
+            if status is not None:
+                count_query = count_query.where(Order.status == status)
+            count_result = await session.execute(count_query)
             total_count = int(count_result.scalar_one())
-            result = await session.execute(
+            page_count = max(ceil(total_count / OrderService.page_size), 1)
+            if total_count > 0 and normalized_page > page_count:
+                normalized_page = page_count
+            elif total_count == 0:
+                normalized_page = 1
+
+            query = (
                 select(Order)
                 .options(
                     selectinload(Order.service),
@@ -93,7 +136,20 @@ class OrderService:
                 .offset((normalized_page - 1) * OrderService.page_size)
                 .limit(OrderService.page_size)
             )
-            return list(result.scalars().all()), total_count
+            if status is not None:
+                query = query.where(Order.status == status)
+            result = await session.execute(
+                query
+            )
+            return OrderPage(
+                orders=list(result.scalars().all()),
+                total_count=total_count,
+                page=normalized_page,
+                page_count=page_count,
+                page_size=OrderService.page_size,
+                status=status,
+                requested_page=requested_page,
+            )
 
     @staticmethod
     async def list_user_orders(user_id: int) -> list[Order]:
@@ -105,7 +161,7 @@ class OrderService:
                     selectinload(Order.plan),
                 )
                 .where(Order.user_id == user_id)
-                .order_by(Order.id.desc())
+                .order_by(Order.id.asc())
             )
             return list(result.scalars().all())
 
@@ -155,6 +211,16 @@ class OrderService:
             OrderService.rejected: "رد شده",
         }
         return labels.get(status, status)
+
+    @staticmethod
+    def order_filter_label(order_filter: str) -> str:
+        labels = {
+            OrderService.filter_all: "همه سفارش‌ها",
+            OrderService.filter_approved: "سفارش‌های تایید شده",
+            OrderService.filter_pending: "سفارش‌های درحال پیگیری",
+            OrderService.filter_rejected: "سفارش‌های رد شده",
+        }
+        return labels.get(order_filter, "سفارش‌ها")
 
     @staticmethod
     def admin_notification_text(order: Order) -> str:

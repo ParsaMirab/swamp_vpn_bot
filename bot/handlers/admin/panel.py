@@ -11,6 +11,7 @@ from bot.filters.admin import AdminFilter
 from bot.keyboards.admin import (
     AdminCallback,
     admin_order_details_keyboard,
+    admin_orders_menu_keyboard,
     admin_orders_keyboard,
     admin_panel_keyboard,
     delete_cards_keyboard,
@@ -27,7 +28,8 @@ from bot.keyboards.admin import (
 )
 from bot.services.bank_card_service import BankCardService
 from bot.services.discount_service import DiscountCodeService
-from bot.services.order_service import OrderService
+from bot.services.order_service import OrderPage, OrderService
+from bot.keyboards.admin import _parse_order_view_callback
 from bot.services.plan_service import PlanService
 from bot.services.required_channel_service import RequiredChannelService
 from bot.services.service_service import ServiceService
@@ -61,14 +63,47 @@ async def join_require_back(callback: CallbackQuery, state: FSMContext) -> None:
 @router.callback_query(AdminFilter(), F.data == AdminCallback.orders)
 async def orders_panel(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
-    await _answer_orders_page(callback, page=1)
+    await callback.answer()
+    if callback.message:
+        await callback.message.edit_text("سفارش‌ها", reply_markup=admin_orders_menu_keyboard())
 
 
-@router.callback_query(AdminFilter(), F.data.startswith("admin:orders:page:"))
+@router.callback_query(AdminFilter(), F.data.regexp(r"^orders:(all|approved|pending|rejected):page:\d+$"))
 async def orders_page(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
-    page = _parse_callback_int(callback.data) or 1
-    await _answer_orders_page(callback, page=page)
+    order_filter, page = _parse_orders_page_callback(callback.data)
+    if order_filter is None or page is None:
+        await callback.answer("صفحه نامعتبر است.", show_alert=True)
+        return
+    await _answer_orders_page(callback, order_filter=order_filter, page=page)
+
+
+@router.callback_query(AdminFilter(), F.data == AdminCallback.orders_search)
+async def order_search_start(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(AdminOrderStates.waiting_for_search_order_id)
+    await callback.answer()
+    if callback.message:
+        await callback.message.answer("آیدی سفارش را وارد کنید")
+
+
+@router.message(AdminFilter(), AdminOrderStates.waiting_for_search_order_id)
+async def order_search_finish(message: Message, state: FSMContext) -> None:
+    if not message.text or not message.text.strip().isdigit():
+        await message.answer("آیدی سفارش را به‌صورت عدد وارد کنید.")
+        return
+    await state.clear()
+    order = await OrderService.get_order(int(message.text.strip()))
+    if order is None:
+        await message.answer("❌ سفارشی با این شناسه پیدا نشد.", reply_markup=admin_orders_menu_keyboard())
+        return
+    await message.answer(
+        OrderService.admin_details_text(order),
+        reply_markup=admin_order_details_keyboard(
+            order.id,
+            order.status,
+            back_callback="orders:all:page:1"
+        )
+    )
 
 
 @router.callback_query(AdminFilter(), F.data == AdminCallback.orders_back)
@@ -87,6 +122,16 @@ async def order_details(callback: CallbackQuery, state: FSMContext) -> None:
         await callback.answer()
         return
     await _answer_order_details(callback, order_id)
+
+
+@router.callback_query(AdminFilter(), F.data.startswith("orders:view:"))
+async def order_details_from_list(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    order_filter, page, order_id = _parse_order_view_callback(callback.data)
+    if order_filter is None or page is None or order_id is None:
+        await callback.answer()
+        return
+    await _answer_order_details(callback, order_id, back_callback=f"orders:{order_filter}:page:{page}")
 
 
 @router.callback_query(AdminFilter(), F.data.startswith("admin:orders:approve:"))
@@ -163,10 +208,14 @@ async def reject_order(callback: CallbackQuery, state: FSMContext, bot: Bot) -> 
     except TelegramAPIError:
         pass
     await callback.answer("سفارش رد شد")
+
     if callback.message:
         await callback.message.edit_text(
             OrderService.admin_details_text(order),
-            reply_markup=admin_order_details_keyboard(order.id),
+            reply_markup=admin_order_details_keyboard(
+                order.id,
+                order.status,
+            ),
         )
 
 
@@ -616,21 +665,41 @@ async def delete_discount(callback: CallbackQuery) -> None:
     await _answer_discount_codes_panel(callback, answer_text="کد تخفیف حذف شد" if deleted else "کد تخفیف پیدا نشد")
 
 
-async def _answer_orders_page(callback: CallbackQuery, page: int, answer_text: str | None = None) -> None:
-    orders, total_count = await OrderService.list_orders(page)
-    await callback.answer(answer_text)
+async def _answer_orders_page(
+    callback: CallbackQuery,
+    order_filter: str,
+    page: int,
+    answer_text: str | None = None,
+) -> None:
+    order_page = await OrderService.list_orders_paged(order_filter, page)
+    if order_page.is_out_of_range:
+        answer_text = answer_text or "صفحه نامعتبر بود."
+    await callback.answer(answer_text, show_alert=order_page.is_out_of_range)
     if not callback.message:
         return
-    if not orders:
-        await callback.message.edit_text("سفارش‌ها\n\nهیچ سفارشی ثبت نشده است.", reply_markup=admin_panel_keyboard())
+    if not order_page.orders:
+        await callback.message.edit_text(
+            f"{OrderService.order_filter_label(order_filter)}\n\nهیچ سفارشی برای نمایش وجود ندارد.",
+            reply_markup=admin_orders_keyboard(order_page=order_page, order_filter=order_filter),
+        )
         return
     await callback.message.edit_text(
-        "سفارش‌ها",
-        reply_markup=admin_orders_keyboard(orders=orders, page=max(page, 1), total_count=total_count),
+        _admin_orders_page_text(order_page=order_page, order_filter=order_filter),
+        reply_markup=admin_orders_keyboard(order_page=order_page, order_filter=order_filter),
     )
 
+def _admin_orders_page_text(
+    order_page: OrderPage,
+    order_filter: str,
+) -> str:
+    return (
+        f"{OrderService.order_filter_label(order_filter)}\n\n"
+        f"تعداد سفارش‌ها: {order_page.total_count}\n"
+        f"صفحه {order_page.page} از {order_page.page_count}\n\n"
+        "برای مشاهده جزئیات، یکی از سفارش‌ها را انتخاب کنید."
+    )
 
-async def _answer_order_details(callback: CallbackQuery, order_id: int) -> None:
+async def _answer_order_details(callback: CallbackQuery, order_id: int, back_callback: str = "orders:all:page:1") -> None:
     order = await OrderService.get_order(order_id)
     if order is None:
         await callback.answer("سفارش پیدا نشد", show_alert=True)
@@ -642,8 +711,11 @@ async def _answer_order_details(callback: CallbackQuery, order_id: int) -> None:
         await callback.message.answer_photo(photo=order.receipt_file_id, caption="فیش پرداخت")
     await callback.message.edit_text(
         OrderService.admin_details_text(order),
-        reply_markup=admin_order_details_keyboard(order.id),
-    )
+        reply_markup=admin_order_details_keyboard(
+            order.id,
+            order.status,
+            back_callback=back_callback
+        )    )
 
 
 async def _answer_join_require_panel(callback: CallbackQuery, answer_text: str | None = None) -> None:
@@ -747,3 +819,24 @@ def _parse_callback_int(callback_data: str | None) -> int | None:
     if not value.isdigit():
         return None
     return int(value)
+def _parse_orders_page_callback(
+    callback_data: str | None,
+) -> tuple[str | None, int | None]:
+    if not callback_data:
+        return None, None
+
+    parts = callback_data.split(":")
+
+    if len(parts) != 4:
+        return None, None
+
+    if parts[0] != "orders":
+        return None, None
+
+    if parts[2] != "page":
+        return None, None
+
+    if not parts[3].isdigit():
+        return None, None
+
+    return parts[1], int(parts[3])

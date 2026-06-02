@@ -3,7 +3,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from bot.database.models import BankCard, DiscountCode, Order, Plan, RequiredChannel, Service
 from bot.services.bank_card_service import BankCardService
-from bot.services.order_service import OrderService
+from bot.services.order_service import OrderPage, OrderService
 from bot.services.required_channel_service import RequiredChannelService
 
 
@@ -32,6 +32,7 @@ class AdminCallback:
     discount_delete_menu = "admin:discounts:delete_menu"
     discount_back = "admin:discounts:back"
     orders_back = "admin:orders:back"
+    orders_search = "orders:search"
 
 
 def admin_panel_keyboard() -> InlineKeyboardMarkup:
@@ -150,34 +151,73 @@ def delete_discounts_keyboard(discounts: list[DiscountCode]) -> InlineKeyboardMa
     return builder.as_markup()
 
 
-def admin_orders_keyboard(orders: list[Order], page: int, total_count: int) -> InlineKeyboardMarkup:
+def admin_orders_menu_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    for order in orders:
-        builder.row(
-            InlineKeyboardButton(
-                text=f"#{order.id} | {order.plan.name} | {OrderService.status_label(order.status)}",
-                callback_data=f"admin:orders:view:{order.id}",
-            )
-        )
-
-    page_count = max((total_count + OrderService.page_size - 1) // OrderService.page_size, 1)
-    navigation_buttons: list[InlineKeyboardButton] = []
-    if page > 1:
-        navigation_buttons.append(InlineKeyboardButton(text="قبلی", callback_data=f"admin:orders:page:{page - 1}"))
-    if page < page_count:
-        navigation_buttons.append(InlineKeyboardButton(text="بعدی", callback_data=f"admin:orders:page:{page + 1}"))
-    if navigation_buttons:
-        builder.row(*navigation_buttons)
-
+    builder.row(InlineKeyboardButton(text="همه سفارش‌ها", callback_data="orders:all:page:1"))
+    builder.row(InlineKeyboardButton(text="✅ سفارش‌های تایید شده", callback_data="orders:approved:page:1"))
+    builder.row(InlineKeyboardButton(text="⏳ سفارش‌های درحال پیگیری", callback_data="orders:pending:page:1"))
+    builder.row(InlineKeyboardButton(text="❌ سفارش‌های رد شده", callback_data="orders:rejected:page:1"))
+    builder.row(InlineKeyboardButton(text="جستجوی سفارش", callback_data=AdminCallback.orders_search))
     builder.row(InlineKeyboardButton(text="بازگشت", callback_data=AdminCallback.orders_back))
     return builder.as_markup()
 
 
-def admin_order_details_keyboard(order_id: int, page: int = 1) -> InlineKeyboardMarkup:
+def admin_orders_keyboard(order_page: OrderPage, order_filter: str) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text="✅ تایید سفارش", callback_data=f"admin:orders:approve:{order_id}"))
-    builder.row(InlineKeyboardButton(text="❌ رد سفارش", callback_data=f"admin:orders:reject:{order_id}"))
-    builder.row(InlineKeyboardButton(text="بازگشت", callback_data=f"admin:orders:page:{page}"))
+    for order in order_page.orders:
+       builder.row(
+           InlineKeyboardButton(
+               text=f"#{order.id} | {order.user_id}",
+               callback_data=f"orders:view:{order_filter}:{order_page.page}:{order.id}",
+           )
+       )
+
+    navigation_buttons: list[InlineKeyboardButton] = []
+    if order_page.page > 1:
+        navigation_buttons.append(
+            InlineKeyboardButton(text="⬅️ صفحه قبل", callback_data=f"orders:{order_filter}:page:{order_page.page - 1}")
+        )
+    if order_page.page < order_page.page_count:
+        navigation_buttons.append(
+            InlineKeyboardButton(text="➡️ صفحه بعد", callback_data=f"orders:{order_filter}:page:{order_page.page + 1}")
+        )
+    if navigation_buttons:
+        builder.row(*navigation_buttons)
+
+    builder.row(InlineKeyboardButton(text="بازگشت", callback_data=AdminCallback.orders))
+    return builder.as_markup()
+
+
+def admin_order_details_keyboard(
+    order_id: int,
+    status: str,
+    back_callback: str = "orders:all:page:1",
+) -> InlineKeyboardMarkup:
+
+    builder = InlineKeyboardBuilder()
+
+    if status == "pending":
+        builder.row(
+            InlineKeyboardButton(
+                text="✅ تایید سفارش",
+                callback_data=f"admin:orders:approve:{order_id}",
+            )
+        )
+
+        builder.row(
+            InlineKeyboardButton(
+                text="❌ رد سفارش",
+                callback_data=f"admin:orders:reject:{order_id}",
+            )
+        )
+
+    builder.row(
+        InlineKeyboardButton(
+            text="بازگشت",
+            callback_data=back_callback,
+        )
+    )
+
     return builder.as_markup()
 
 
@@ -185,3 +225,26 @@ def admin_order_notification_keyboard(order_id: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text="مشاهده سفارش", callback_data=f"admin:orders:view:{order_id}"))
     return builder.as_markup()
+def _parse_order_view_callback(
+    callback_data: str | None,
+) -> tuple[str | None, int | None, int | None]:
+    if not callback_data:
+        return None, None, None
+
+    parts = callback_data.split(":")
+
+    if len(parts) != 5:
+        return None, None, None
+
+    if parts[0] != "orders" or parts[1] != "view":
+        return None, None, None
+
+    order_filter = parts[2]
+
+    if not parts[3].isdigit() or not parts[4].isdigit():
+        return None, None, None
+
+    page = int(parts[3])
+    order_id = int(parts[4])
+
+    return order_filter, page, order_id
