@@ -155,7 +155,7 @@ def admin_orders_keyboard(orders: list[Order], page: int, total_count: int) -> I
     for order in orders:
         builder.row(
             InlineKeyboardButton(
-                text=f"#{order.id} | {order.plan.name} | {OrderService.status_label(order.status)}",
+                text=f"#{order.id} | {order.plan.name[:20]}",
                 callback_data=f"admin:orders:view:{order.id}",
             )
         )

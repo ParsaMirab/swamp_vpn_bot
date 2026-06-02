@@ -5,6 +5,8 @@ from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
+from aiogram.types import FSInputFile
+from aiogram.exceptions import TelegramBadRequest
 
 from bot.config import settings
 from bot.filters.admin import AdminFilter
@@ -129,19 +131,24 @@ async def approve_order_finish(message: Message, state: FSMContext, bot: Bot) ->
         return
 
     try:
-        await bot.send_message(
+        photo = FSInputFile("assets/order_approved.jpg")
+
+        await bot.send_photo(
             chat_id=order.user_id,
-            text=(
+            photo=photo,
+            caption=(
                 "✅ سفارش شما تایید شد.\n\n"
                 "کانفیگ شما:\n\n"
                 f"<code>{escape(order.config_text or '')}</code>\n\n"
                 "از بخش «سفارش‌های من» می‌توانید مجدداً آن را مشاهده کنید."
             ),
+            parse_mode="HTML",
         )
+
         await message.answer("سفارش تایید شد و کانفیگ برای خریدار ارسال شد.")
+
     except TelegramAPIError:
         await message.answer("سفارش تایید شد، اما ارسال پیام به خریدار ناموفق بود.")
-    await message.answer(OrderService.admin_details_text(order), reply_markup=admin_order_details_keyboard(order.id))
 
 
 @router.callback_query(AdminFilter(), F.data.startswith("admin:orders:reject:"))
@@ -624,10 +631,17 @@ async def _answer_orders_page(callback: CallbackQuery, page: int, answer_text: s
     if not orders:
         await callback.message.edit_text("سفارش‌ها\n\nهیچ سفارشی ثبت نشده است.", reply_markup=admin_panel_keyboard())
         return
-    await callback.message.edit_text(
-        "سفارش‌ها",
-        reply_markup=admin_orders_keyboard(orders=orders, page=max(page, 1), total_count=total_count),
-    )
+    try:
+        await callback.message.edit_text(
+            "سفارش‌ها",
+            reply_markup=admin_orders_keyboard(
+                orders=orders,
+                page=max(page, 1),
+                total_count=total_count,
+            ),
+        )
+    except TelegramBadRequest:
+        pass
 
 
 async def _answer_order_details(callback: CallbackQuery, order_id: int) -> None:
