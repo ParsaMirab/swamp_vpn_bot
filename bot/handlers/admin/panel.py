@@ -147,9 +147,9 @@ async def approve_order_finish(message: Message, state: FSMContext, bot: Bot) ->
 
         await message.answer("سفارش تایید شد و کانفیگ برای خریدار ارسال شد.")
 
-    except TelegramAPIError:
-        await message.answer("سفارش تایید شد، اما ارسال پیام به خریدار ناموفق بود.")
-
+    except TelegramAPIError as e:
+        print("SEND PHOTO ERROR:", e)
+        await message.answer("ارسال پیام به خریدار ناموفق بود.")
 
 @router.callback_query(AdminFilter(), F.data.startswith("admin:orders:reject:"))
 async def reject_order(callback: CallbackQuery, state: FSMContext, bot: Bot) -> None:
