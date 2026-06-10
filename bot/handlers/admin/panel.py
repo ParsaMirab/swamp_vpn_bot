@@ -1,16 +1,18 @@
+import asyncio
+import logging
 from datetime import datetime, timedelta, timezone
 from html import escape
 
 from aiogram import Bot, F, Router
-from aiogram.exceptions import TelegramAPIError
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from aiogram.types import FSInputFile
-from aiogram.exceptions import TelegramBadRequest
 
 from bot.config import settings
 from bot.filters.admin import AdminFilter
+from bot.services.user_service import UserService
 from bot.keyboards.admin import (
     AdminCallback,
     admin_order_details_keyboard,
@@ -36,7 +38,8 @@ from bot.keyboards.admin import _parse_order_view_callback
 from bot.services.plan_service import PlanService
 from bot.services.required_channel_service import RequiredChannelService
 from bot.services.service_service import ServiceService
-from bot.states.admin import AdminOrderStates, BankCardStates, DiscountCodeStates, JoinRequireStates, PlanStates, ServiceStates
+from bot.services.setting_service import SettingService
+from bot.states.admin import AdminOrderStates, BankCardStates, DiscountCodeStates, JoinRequireStates, PlanStates, ServiceStates, BroadcastStates
 
 router = Router(name="admin_panel")
 
@@ -46,7 +49,13 @@ async def admin_command(message: Message, state: FSMContext) -> None:
     await state.clear()
     if not message.from_user or message.from_user.id != settings.admin_id:
         return
-    await message.answer("پنل مدیریت", reply_markup=admin_panel_keyboard())
+    sales_open = await SettingService.is_sales_open()
+    status_icon = "🟢" if sales_open else "🔴"
+    status_text = "باز" if sales_open else "بسته"
+    await message.answer(
+        f"پنل مدیریت\n\n{status_icon} وضعیت فروش: {status_text}",
+        reply_markup=admin_panel_keyboard(sales_open),
+    )
 
 
 @router.callback_query(AdminFilter(), F.data == AdminCallback.join_require)
@@ -60,7 +69,11 @@ async def join_require_back(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     await callback.answer()
     if callback.message:
-        await callback.message.edit_text("پنل مدیریت", reply_markup=admin_panel_keyboard())
+        sales_open = await SettingService.is_sales_open()
+        await callback.message.edit_text(
+            _admin_panel_text(sales_open),
+            reply_markup=admin_panel_keyboard(sales_open),
+        )
 
 
 @router.callback_query(AdminFilter(), F.data == AdminCallback.orders)
@@ -114,7 +127,11 @@ async def orders_back(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     await callback.answer()
     if callback.message:
-        await callback.message.edit_text("پنل مدیریت", reply_markup=admin_panel_keyboard())
+        sales_open = await SettingService.is_sales_open()
+        await callback.message.edit_text(
+            _admin_panel_text(sales_open),
+            reply_markup=admin_panel_keyboard(sales_open),
+        )
 
 
 @router.callback_query(AdminFilter(), F.data.startswith("admin:orders:view:"))
@@ -201,7 +218,7 @@ async def approve_order_finish(message: Message, state: FSMContext, bot: Bot) ->
         photo = FSInputFile("assets/order_approved.jpg")
 
         caption = "🎉 سفارش شما با موفقیت تایید شد.\n\n"
-        caption += f"📡 لینک اشتراک:\n<code>{order.sub_link or 'ندارد'}</code>\n\n"
+        caption += f"📡 لینک ساب:\n<code>{order.sub_link or 'ندارد'}</code>\n\n"
         caption += f"📋 کانفیگ:\n<code>{order.config_text or 'ندارد'}</code>\n\n"
         caption += "💾 از بخش «سفارش‌های من» می‌توانید در هر زمان مجدداً اطلاعات سرویس خود را مشاهده کنید."
 
@@ -324,7 +341,11 @@ async def service_management_back(callback: CallbackQuery, state: FSMContext) ->
     await state.clear()
     await callback.answer()
     if callback.message:
-        await callback.message.edit_text("پنل مدیریت", reply_markup=admin_panel_keyboard())
+        sales_open = await SettingService.is_sales_open()
+        await callback.message.edit_text(
+            _admin_panel_text(sales_open),
+            reply_markup=admin_panel_keyboard(sales_open),
+        )
 
 
 @router.callback_query(AdminFilter(), F.data == AdminCallback.service_add)
@@ -399,7 +420,11 @@ async def plan_services_back(callback: CallbackQuery, state: FSMContext) -> None
     await state.clear()
     await callback.answer()
     if callback.message:
-        await callback.message.edit_text("پنل مدیریت", reply_markup=admin_panel_keyboard())
+        sales_open = await SettingService.is_sales_open()
+        await callback.message.edit_text(
+            _admin_panel_text(sales_open),
+            reply_markup=admin_panel_keyboard(sales_open),
+        )
 
 
 @router.callback_query(AdminFilter(), F.data.startswith("admin:plans:service:"))
@@ -513,7 +538,11 @@ async def financial_management_back(callback: CallbackQuery, state: FSMContext) 
     await state.clear()
     await callback.answer()
     if callback.message:
-        await callback.message.edit_text("پنل مدیریت", reply_markup=admin_panel_keyboard())
+        sales_open = await SettingService.is_sales_open()
+        await callback.message.edit_text(
+            _admin_panel_text(sales_open),
+            reply_markup=admin_panel_keyboard(sales_open),
+        )
 
 
 @router.callback_query(AdminFilter(), F.data == AdminCallback.card_add)
@@ -600,7 +629,11 @@ async def discount_codes_back(callback: CallbackQuery, state: FSMContext) -> Non
     await state.clear()
     await callback.answer()
     if callback.message:
-        await callback.message.edit_text("پنل مدیریت", reply_markup=admin_panel_keyboard())
+        sales_open = await SettingService.is_sales_open()
+        await callback.message.edit_text(
+            _admin_panel_text(sales_open),
+            reply_markup=admin_panel_keyboard(sales_open),
+        )
 
 
 @router.callback_query(AdminFilter(), F.data == AdminCallback.discount_create)
@@ -731,6 +764,120 @@ async def delete_discount(callback: CallbackQuery) -> None:
         return
     deleted = await DiscountCodeService.delete_discount(discount_id)
     await _answer_discount_codes_panel(callback, answer_text="کد تخفیف حذف شد" if deleted else "کد تخفیف پیدا نشد")
+
+
+@router.callback_query(AdminFilter(), F.data == AdminCallback.broadcast)
+async def broadcast_start(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(BroadcastStates.waiting_for_message)
+    await callback.answer()
+    if callback.message:
+        await callback.message.answer(
+            "📢 پیامی که می‌خواهید برای همه کاربران ارسال شود را وارد کنید."
+        )
+
+
+@router.message(AdminFilter(), BroadcastStates.waiting_for_message)
+async def broadcast_finish(message: Message, state: FSMContext, bot: Bot) -> None:
+    if not message.text and not message.photo and not message.video and not message.document:
+        await message.answer("لطفاً یک پیام متنی ارسال کنید.")
+        return
+
+    await state.clear()
+
+    user_ids = await UserService.list_all_user_ids()
+    total = len(user_ids)
+    logging.info(f"Broadcast: loaded {total} users from database")
+
+    if total == 0:
+        await message.answer("📊 گزارش ارسال پیام همگانی\n\nهیچ کاربری برای ارسال وجود ندارد.")
+        return
+
+    status_msg = await message.answer(
+        f"📤 در حال ارسال پیام به {total} کاربر...\n"
+        f"✅ ارسال: 0\n"
+        f"❌ ناموفق: 0"
+    )
+
+    sent = 0
+    failed = 0
+
+    for index, user_id in enumerate(user_ids, start=1):
+        logging.info(f"Broadcast: processing user {index}/{total} — id={user_id}")
+
+        try:
+            if message.text:
+                await bot.send_message(chat_id=user_id, text=message.text)
+            elif message.photo:
+                await bot.send_photo(
+                    chat_id=user_id,
+                    photo=message.photo[-1].file_id,
+                    caption=message.caption or "",
+                )
+            elif message.video:
+                await bot.send_video(
+                    chat_id=user_id,
+                    video=message.video[-1].file_id,
+                    caption=message.caption or "",
+                )
+            elif message.document:
+                await bot.send_document(
+                    chat_id=user_id,
+                    document=message.document[-1].file_id,
+                    caption=message.caption or "",
+                )
+            sent += 1
+            logging.info(f"Broadcast: success — user {user_id} (sent={sent}, failed={failed})")
+
+        except TelegramForbiddenError:
+            failed += 1
+            logging.warning(f"Broadcast: failed — user {user_id} blocked the bot (sent={sent}, failed={failed})")
+
+        except TelegramRetryAfter as e:
+            failed += 1
+            logging.warning(f"Broadcast: rate limited — user {user_id}, retry after {e.retry_after}s (sent={sent}, failed={failed})")
+
+        except TelegramBadRequest as e:
+            failed += 1
+            logging.warning(f"Broadcast: failed — user {user_id} bad request: {e} (sent={sent}, failed={failed})")
+
+        except TelegramAPIError as e:
+            failed += 1
+            logging.warning(f"Broadcast: failed — user {user_id} API error: {e} (sent={sent}, failed={failed})")
+
+        if index % 10 == 0 or index == total:
+            try:
+                await status_msg.edit_text(
+                    f"📤 در حال ارسال پیام به {total} کاربر...\n"
+                    f"✅ ارسال: {sent}\n"
+                    f"❌ ناموفق: {failed}"
+                )
+            except TelegramBadRequest:
+                pass
+
+        await asyncio.sleep(0.05)
+
+    logging.info(f"Broadcast: final report — sent={sent}, failed={failed}")
+
+    await status_msg.edit_text(
+        f"📊 گزارش ارسال پیام همگانی\n\n"
+        f"✅ ارسال شد: {sent} کاربر\n"
+        f"❌ ناموفق: {failed} کاربر"
+    )
+
+
+@router.callback_query(AdminFilter(), F.data == AdminCallback.sales_toggle)
+async def sales_toggle(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    is_open = await SettingService.toggle_sales()
+    status_icon = "🟢" if is_open else "🔴"
+    status_text = "باز" if is_open else "بسته"
+    await callback.answer()
+    if callback.message:
+        await callback.message.edit_text(
+            _admin_panel_text(is_open),
+            reply_markup=admin_panel_keyboard(is_open),
+        )
+        await callback.message.answer(f"وضعیت فروش به {status_text} تغییر یافت.")
 
 
 async def _answer_orders_page(
@@ -883,6 +1030,12 @@ async def _discount_list_text() -> str:
             f"{user_ids}"
         )
     return "\n\n---\n\n".join(blocks)
+
+
+def _admin_panel_text(sales_open: bool) -> str:
+    status_icon = "🟢" if sales_open else "🔴"
+    status_text = "باز" if sales_open else "بسته"
+    return f"پنل مدیریت\n\n{status_icon} وضعیت فروش: {status_text}"
 
 
 def _parse_callback_int(callback_data: str | None) -> int | None:

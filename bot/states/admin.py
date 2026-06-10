@@ -31,3 +31,7 @@ class AdminOrderStates(StatesGroup):
     waiting_for_sub_link = State()
     waiting_for_config = State()
     waiting_for_search_order_id = State()
+
+
+class BroadcastStates(StatesGroup):
+    waiting_for_message = State()

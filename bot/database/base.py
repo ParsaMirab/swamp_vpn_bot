@@ -75,3 +75,15 @@ async def init_db() -> None:
             await connection.execute(text("DROP TABLE discount_usages"))
             await connection.execute(text("ALTER TABLE discount_usages_new RENAME TO discount_usages"))
             await connection.execute(text("PRAGMA foreign_keys=ON"))
+
+        result = await connection.execute(text("SELECT COUNT(*) FROM settings WHERE key = 'sales_open'"))
+        if result.scalar_one() == 0:
+            await connection.execute(text("INSERT INTO settings (key, value) VALUES ('sales_open', 'true')"))
+
+        user_count = await connection.execute(text("SELECT COUNT(*) FROM users"))
+        if user_count.scalar_one() == 0:
+            await connection.execute(text("""
+                INSERT OR IGNORE INTO users (id, first_seen, last_active)
+                SELECT DISTINCT user_id, datetime('now'), datetime('now')
+                FROM orders
+            """))

@@ -8,6 +8,23 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from bot.database.base import Base
 
 
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=False)
+    username: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    first_seen: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    last_active: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+
 class RequiredChannel(Base):
     __tablename__ = "required_channels"
     __table_args__ = (UniqueConstraint("channel_id", name="uq_required_channels_channel_id"),)
@@ -142,3 +159,12 @@ class Order(Base):
     service: Mapped[Service] = relationship(back_populates="orders")
     plan: Mapped[Plan] = relationship(back_populates="orders")
     discount: Mapped[DiscountCode | None] = relationship(back_populates="orders")
+
+
+class Setting(Base):
+    __tablename__ = "settings"
+    __table_args__ = (UniqueConstraint("key", name="uq_settings_key"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    key: Mapped[str] = mapped_column(String(128), nullable=False)
+    value: Mapped[str] = mapped_column(String(512), nullable=False, server_default="")

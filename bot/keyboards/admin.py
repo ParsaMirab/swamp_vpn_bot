@@ -33,9 +33,11 @@ class AdminCallback:
     discount_back = "admin:discounts:back"
     orders_back = "admin:orders:back"
     orders_search = "orders:search"
+    broadcast = "admin:broadcast"
+    sales_toggle = "admin:sales:toggle"
 
 
-def admin_panel_keyboard() -> InlineKeyboardMarkup:
+def admin_panel_keyboard(sales_open: bool = True) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text="جوین اجباری", callback_data=AdminCallback.join_require))
     builder.row(
@@ -45,6 +47,9 @@ def admin_panel_keyboard() -> InlineKeyboardMarkup:
     builder.row(InlineKeyboardButton(text="مدیریت پلن‌ها", callback_data=AdminCallback.add_plan))
     builder.row(InlineKeyboardButton(text="مدیریت مالی", callback_data=AdminCallback.financial_management))
     builder.row(InlineKeyboardButton(text="مدیریت کد تخفیف", callback_data=AdminCallback.discount_codes))
+    builder.row(InlineKeyboardButton(text=" ارسال پیام همگانی", callback_data=AdminCallback.broadcast))
+    sales_label = "🟢 فروشگاه باز" if sales_open else "🔴 فروشگاه بسته"
+    builder.row(InlineKeyboardButton(text=sales_label, callback_data=AdminCallback.sales_toggle))
     builder.row(InlineKeyboardButton(text="بازگشت", callback_data=AdminCallback.back))
     return builder.as_markup()
 

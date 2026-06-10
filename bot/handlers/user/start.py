@@ -25,7 +25,9 @@ from bot.services.order_service import OrderService
 from bot.services.plan_service import PlanService
 from bot.services.required_channel_service import RequiredChannelService
 from bot.services.service_service import ServiceService
+from bot.services.setting_service import SettingService
 from bot.states.user import UserOrderStates
+from bot.services.user_service import UserService
 
 router = Router(name="user_start")
 WELCOME_TEXT = """
@@ -42,6 +44,11 @@ WELCOME_TEXT = """
 @router.message(CommandStart())
 async def start_command(message: Message, state: FSMContext) -> None:
     await state.clear()
+    if message.from_user:
+        await UserService.register_user(
+            user_id=message.from_user.id,
+            username=message.from_user.username,
+        )
     await message.answer(WELCOME_TEXT, reply_markup=main_menu_keyboard())
 
 
@@ -84,6 +91,15 @@ async def user_back_to_main(callback: CallbackQuery, state: FSMContext) -> None:
 @router.callback_query(F.data == UserCallback.buy_service)
 async def buy_service_start(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
+    sales_open = await SettingService.is_sales_open()
+    if not sales_open:
+        await callback.answer()
+        if callback.message:
+            await callback.message.answer(
+                "🔴 فروشگاه در حال حاضر بسته است.\n\n"
+                "لطفاً بعداً تلاش کنید."
+            )
+        return
     services = await ServiceService.list_services()
     await callback.answer()
     if not callback.message:
@@ -216,6 +232,16 @@ async def register_order(callback: CallbackQuery, state: FSMContext) -> None:
         await callback.answer()
         return
 
+    sales_open = await SettingService.is_sales_open()
+    if not sales_open:
+        await callback.answer()
+        if callback.message:
+            await callback.message.answer(
+                "🔴 فروشگاه در حال حاضر بسته است.\n\n"
+                "لطفاً بعداً تلاش کنید."
+            )
+        return
+
     data = await state.get_data()
     service_id = data.get("service_id")
     plan_id = data.get("plan_id")
@@ -264,6 +290,15 @@ async def register_order(callback: CallbackQuery, state: FSMContext) -> None:
 
 @router.message(UserOrderStates.waiting_for_receipt)
 async def receipt_upload(message: Message, state: FSMContext, bot: Bot) -> None:
+    sales_open = await SettingService.is_sales_open()
+    if not sales_open:
+        await state.clear()
+        await message.answer(
+            "🔴 فروشگاه در حال حاضر بسته است.\n\n"
+            "لطفاً بعداً تلاش کنید."
+        )
+        return
+
     data = await state.get_data()
     service_id = data.get("service_id")
     plan_id = data.get("plan_id")
