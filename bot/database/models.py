@@ -78,7 +78,9 @@ class DiscountCode(Base):
     code: Mapped[str] = mapped_column(String(64), nullable=False)
     discount_amount: Mapped[int] = mapped_column(Integer, nullable=False)
     usage_limit: Mapped[int] = mapped_column(Integer, nullable=False)
+    per_user_usage_limit: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
     used_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -95,7 +97,6 @@ class DiscountCode(Base):
 
 class DiscountUsage(Base):
     __tablename__ = "discount_usages"
-    __table_args__ = (UniqueConstraint("discount_id", "user_id", name="uq_discount_usages_discount_user"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     discount_id: Mapped[int] = mapped_column(
@@ -128,6 +129,7 @@ class Order(Base):
     original_price: Mapped[int] = mapped_column(Integer, nullable=False)
     final_price: Mapped[int] = mapped_column(Integer, nullable=False)
     receipt_file_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    sub_link: Mapped[str | None] = mapped_column(Text, nullable=True)
     config_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending", server_default="pending")
     created_at: Mapped[datetime] = mapped_column(

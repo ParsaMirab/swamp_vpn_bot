@@ -98,6 +98,7 @@ class ServicePlanServicesTest(unittest.IsolatedAsyncioTestCase):
         discount = await DiscountCodeService.create_discount(
             code="swamp50",
             usage_limit=1,
+            per_user_usage_limit=1,
             discount_amount=100000,
         )
 
@@ -127,10 +128,69 @@ class ServicePlanServicesTest(unittest.IsolatedAsyncioTestCase):
                 plan_price=250000,
             )
 
+    async def test_discount_per_user_limit(self) -> None:
+        discount = await DiscountCodeService.create_discount(
+            code="MULTI",
+            usage_limit=10,
+            per_user_usage_limit=2,
+            discount_amount=50000,
+        )
+
+        price_a = await DiscountCodeService.apply_discount(
+            code="MULTI", user_id=100, plan_price=200000,
+        )
+        self.assertEqual(price_a[1], 150000)
+
+        price_b = await DiscountCodeService.apply_discount(
+            code="MULTI", user_id=100, plan_price=300000,
+        )
+        self.assertEqual(price_b[1], 250000)
+
+        with self.assertRaises(ValueError):
+            await DiscountCodeService.apply_discount(
+                code="MULTI", user_id=100, plan_price=200000,
+            )
+
+        result_c = await DiscountCodeService.apply_discount(
+            code="MULTI", user_id=200, plan_price=200000,
+        )
+        self.assertEqual(result_c[1], 150000)
+        discounts = await DiscountCodeService.list_discounts()
+        self.assertEqual(discounts[0].used_count, 3)
+
+    async def test_discount_expiration(self) -> None:
+        from datetime import datetime, timedelta, timezone
+
+        expired = await DiscountCodeService.create_discount(
+            code="EXPIRED",
+            usage_limit=10,
+            per_user_usage_limit=5,
+            discount_amount=50000,
+            expires_at=datetime.now(timezone.utc) - timedelta(days=1),
+        )
+
+        with self.assertRaises(ValueError):
+            await DiscountCodeService.apply_discount(
+                code="EXPIRED", user_id=100, plan_price=200000,
+            )
+
+        valid = await DiscountCodeService.create_discount(
+            code="VALID",
+            usage_limit=10,
+            per_user_usage_limit=5,
+            discount_amount=50000,
+            expires_at=datetime.now(timezone.utc) + timedelta(days=30),
+        )
+
+        result = await DiscountCodeService.apply_discount(
+            code="VALID", user_id=100, plan_price=200000,
+        )
+        self.assertEqual(result[1], 150000)
+
     async def test_order_create_and_attach_receipt(self) -> None:
         service = await ServiceService.create_service("اینترنت ملی")
         plan = await PlanService.create_plan(service_id=service.id, name="100 گیگ", price=250000)
-        discount = await DiscountCodeService.create_discount("VIP100", usage_limit=10, discount_amount=100000)
+        discount = await DiscountCodeService.create_discount("VIP100", usage_limit=10, per_user_usage_limit=1, discount_amount=100000)
 
         order = await OrderService.create_order(
             user_id=123456789,

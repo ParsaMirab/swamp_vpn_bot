@@ -22,9 +22,12 @@ class BankCardStates(StatesGroup):
 class DiscountCodeStates(StatesGroup):
     waiting_for_code = State()
     waiting_for_usage_limit = State()
+    waiting_for_per_user_usage_limit = State()
+    waiting_for_expiration_days = State()
     waiting_for_discount_amount = State()
 
 
 class AdminOrderStates(StatesGroup):
+    waiting_for_sub_link = State()
     waiting_for_config = State()
     waiting_for_search_order_id = State()

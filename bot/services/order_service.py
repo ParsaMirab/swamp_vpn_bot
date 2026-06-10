@@ -166,7 +166,8 @@ class OrderService:
             return list(result.scalars().all())
 
     @staticmethod
-    async def approve_order(order_id: int, config_text: str) -> Order | None:
+    async def approve_order(order_id: int, sub_link: str, config_text: str) -> Order | None:
+        normalized_sub_link = OrderService.normalize_config(sub_link)
         normalized_config = OrderService.normalize_config(config_text)
         async with async_session_factory() as session:
             result = await session.execute(
@@ -174,6 +175,7 @@ class OrderService:
                 .where(Order.id == order_id)
                 .values(
                     status=OrderService.approved,
+                    sub_link=normalized_sub_link,
                     config_text=normalized_config,
                     approved_at=datetime.now(timezone.utc),
                 )
@@ -240,7 +242,7 @@ class OrderService:
 
     @staticmethod
     def admin_details_text(order: Order) -> str:
-        return (
+        text = (
             f"سفارش: {order.id}\n\n"
             "کاربر:\n"
             f"{order.user_id}\n\n"
@@ -255,6 +257,14 @@ class OrderService:
             "وضعیت:\n"
             f"{OrderService.status_label(order.status)}"
         )
+        if order.status == OrderService.approved:
+            text += (
+                "\n\nلینک اشتراک:\n"
+                f"{order.sub_link or 'ندارد'}\n\n"
+                "کانفیگ:\n"
+                f"{order.config_text or 'ندارد'}"
+            )
+        return text
 
     @staticmethod
     def user_details_text(order: Order) -> str:
@@ -275,6 +285,12 @@ class OrderService:
         if order.status == OrderService.rejected:
             return text + "❌ سفارش شما رد شده است."
         if order.status == OrderService.approved:
-            config_text = escape(order.config_text or "")
-        return text + f"✅ سفارش تایید شده است.\n\nکانفیگ:\n\n<code>{escape(config_text)}</code>"
+            return (
+                text
+                + "✅ سفارش تایید شده است.\n\n"
+                + "🔗 لینک اشتراک:\n"
+                f"{order.sub_link or 'ندارد'}\n\n"
+                + "📄 کانفیگ:\n"
+                f"{order.config_text or 'ندارد'}"
+            )
         return text

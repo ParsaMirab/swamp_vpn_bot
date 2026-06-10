@@ -1,4 +1,6 @@
-from sqlalchemy import delete, select
+from datetime import datetime, timezone
+
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
@@ -21,11 +23,21 @@ class DiscountCodeService:
             return list(result.scalars().all())
 
     @staticmethod
-    async def create_discount(code: str, usage_limit: int, discount_amount: int) -> DiscountCode:
+    async def create_discount(
+        code: str,
+        usage_limit: int,
+        per_user_usage_limit: int,
+        discount_amount: int,
+        expires_at: datetime | None = None,
+    ) -> DiscountCode:
         normalized_code = DiscountCodeService.normalize_code(code)
         normalized_usage_limit = DiscountCodeService.normalize_positive_int(
             usage_limit,
             "سقف استفاده باید عدد مثبت باشد.",
+        )
+        normalized_per_user_usage_limit = DiscountCodeService.normalize_positive_int(
+            per_user_usage_limit,
+            "سقف استفاده برای هر کاربر باید عدد مثبت باشد.",
         )
         normalized_discount_amount = DiscountCodeService.normalize_positive_int(
             discount_amount,
@@ -36,8 +48,10 @@ class DiscountCodeService:
             discount = DiscountCode(
                 code=normalized_code,
                 usage_limit=normalized_usage_limit,
+                per_user_usage_limit=normalized_per_user_usage_limit,
                 discount_amount=normalized_discount_amount,
                 used_count=0,
+                expires_at=expires_at,
             )
             session.add(discount)
             try:
@@ -66,9 +80,26 @@ class DiscountCodeService:
                 .where(DiscountCode.code == normalized_code)
             )
             discount = result.scalar_one_or_none()
-            if discount is None or discount.used_count >= discount.usage_limit:
+            if discount is None:
                 raise ValueError(DiscountCodeService.invalid_message)
-            if any(usage.user_id == user_id for usage in discount.usages):
+
+            if discount.expires_at is not None:
+                expires = discount.expires_at if discount.expires_at.tzinfo is not None else discount.expires_at.replace(tzinfo=timezone.utc)
+                if datetime.now(timezone.utc) > expires:
+                    raise ValueError(DiscountCodeService.invalid_message)
+
+            if discount.used_count >= discount.usage_limit:
+                raise ValueError(DiscountCodeService.invalid_message)
+
+            per_user_count = await session.scalar(
+                select(func.count())
+                .select_from(DiscountUsage)
+                .where(
+                    DiscountUsage.discount_id == discount.id,
+                    DiscountUsage.user_id == user_id,
+                )
+            )
+            if per_user_count >= discount.per_user_usage_limit:
                 raise ValueError(DiscountCodeService.invalid_message)
 
             final_price = max(plan_price - discount.discount_amount, 0)

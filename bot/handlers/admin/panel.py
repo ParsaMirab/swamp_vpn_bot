@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta, timezone
 from html import escape
 
 from aiogram import Bot, F, Router
@@ -146,15 +147,15 @@ async def approve_order_start(callback: CallbackQuery, state: FSMContext) -> Non
     if order is None:
         await callback.answer("سفارش پیدا نشد", show_alert=True)
         return
-    await state.set_state(AdminOrderStates.waiting_for_config)
+    await state.set_state(AdminOrderStates.waiting_for_sub_link)
     await state.update_data(order_id=order_id)
     await callback.answer()
     if callback.message:
-        await callback.message.answer("لینک کانفیگ را ارسال کنید")
+        await callback.message.answer("لینک اشتراک را ارسال کنید (در صورت نداشتن، «ندارد» را ارسال کنید)")
 
 
-@router.message(AdminFilter(), AdminOrderStates.waiting_for_config)
-async def approve_order_finish(message: Message, state: FSMContext, bot: Bot) -> None:
+@router.message(AdminFilter(), AdminOrderStates.waiting_for_sub_link)
+async def approve_order_sub_link(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     order_id = data.get("order_id")
     if not isinstance(order_id, int):
@@ -162,11 +163,32 @@ async def approve_order_finish(message: Message, state: FSMContext, bot: Bot) ->
         await message.answer("سفارش معتبر نیست.")
         return
     if not message.text:
-        await message.answer("لینک کانفیگ را ارسال کنید.")
+        await message.answer("لینک اشتراک را ارسال کنید.")
+        return
+    await state.update_data(sub_link=message.text.strip())
+    await state.set_state(AdminOrderStates.waiting_for_config)
+    await message.answer("کانفیگ را ارسال کنید (در صورت نداشتن، «ندارد» را ارسال کنید)")
+
+
+@router.message(AdminFilter(), AdminOrderStates.waiting_for_config)
+async def approve_order_finish(message: Message, state: FSMContext, bot: Bot) -> None:
+    data = await state.get_data()
+    order_id = data.get("order_id")
+    sub_link = data.get("sub_link")
+    if not isinstance(order_id, int) or not isinstance(sub_link, str):
+        await state.clear()
+        await message.answer("سفارش معتبر نیست.")
+        return
+    if not message.text:
+        await message.answer("کانفیگ را ارسال کنید.")
         return
 
     try:
-        order = await OrderService.approve_order(order_id=order_id, config_text=message.text)
+        order = await OrderService.approve_order(
+            order_id=order_id,
+            sub_link=sub_link,
+            config_text=message.text.strip(),
+        )
     except ValueError as exc:
         await message.answer(str(exc))
         return
@@ -178,19 +200,18 @@ async def approve_order_finish(message: Message, state: FSMContext, bot: Bot) ->
     try:
         photo = FSInputFile("assets/order_approved.jpg")
 
+        caption = "🎉 سفارش شما با موفقیت تایید شد.\n\n"
+        caption += f"📡 لینک اشتراک:\n<code>{order.sub_link or 'ندارد'}</code>\n\n"
+        caption += f"📋 کانفیگ:\n<code>{order.config_text or 'ندارد'}</code>\n\n"
+        caption += "💾 از بخش «سفارش‌های من» می‌توانید در هر زمان مجدداً اطلاعات سرویس خود را مشاهده کنید."
+
         await bot.send_photo(
             chat_id=order.user_id,
             photo=photo,
-            caption=(
-                "✅ سفارش شما تایید شد.\n\n"
-                "کانفیگ شما:\n\n"
-                f"<code>{escape(order.config_text or '')}</code>\n\n"
-                "از بخش «سفارش‌های من» می‌توانید مجدداً آن را مشاهده کنید."
-            ),
-            parse_mode="HTML",
+            caption=caption,
         )
 
-        await message.answer("سفارش تایید شد و کانفیگ برای خریدار ارسال شد.")
+        await message.answer("سفارش تایید شد و اطلاعات برای خریدار ارسال شد.")
 
     except TelegramAPIError as e:
         await message.answer(f"خطا در ارسال پیام به خریدار: {e}")
@@ -616,6 +637,44 @@ async def create_discount_usage_limit(message: Message, state: FSMContext) -> No
         await message.answer(str(exc))
         return
     await state.update_data(usage_limit=usage_limit)
+    await state.set_state(DiscountCodeStates.waiting_for_per_user_usage_limit)
+    await message.answer("هر کاربر چند بار می‌تواند از این کد تخفیف استفاده کند؟")
+
+
+@router.message(AdminFilter(), DiscountCodeStates.waiting_for_per_user_usage_limit)
+async def create_discount_per_user_usage_limit(message: Message, state: FSMContext) -> None:
+    if not message.text:
+        await message.answer("سقف استفاده برای هر کاربر را به‌صورت عدد ارسال کنید.")
+        return
+    try:
+        per_user_usage_limit = DiscountCodeService.parse_positive_int(
+            message.text, "سقف استفاده برای هر کاربر باید عدد مثبت باشد.",
+        )
+    except ValueError as exc:
+        await message.answer(str(exc))
+        return
+    await state.update_data(per_user_usage_limit=per_user_usage_limit)
+    await state.set_state(DiscountCodeStates.waiting_for_expiration_days)
+    await message.answer("این کد تخفیف تا چند روز دیگر منقضی شود؟ (0 برای بدون انقضا)")
+
+
+@router.message(AdminFilter(), DiscountCodeStates.waiting_for_expiration_days)
+async def create_discount_expiration(message: Message, state: FSMContext) -> None:
+    if not message.text:
+        await message.answer("تعداد روز را به‌صورت عدد ارسال کنید.")
+        return
+    normalized = PlanService.normalize_digits(message.text).strip()
+    if not normalized.isdigit():
+        await message.answer("تعداد روز را به‌صورت عدد ارسال کنید.")
+        return
+    days = int(normalized)
+    expires_at: datetime | None
+    if days > 0:
+        expires_at = datetime.now(timezone.utc).replace(hour=23, minute=59, second=59, microsecond=0)
+        expires_at += timedelta(days=days - 1)
+    else:
+        expires_at = None
+    await state.update_data(expires_at=expires_at)
     await state.set_state(DiscountCodeStates.waiting_for_discount_amount)
     await message.answer("مبلغ تخفیف را به تومان وارد کنید")
 
@@ -625,7 +684,9 @@ async def create_discount_finish(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     code = data.get("discount_code")
     usage_limit = data.get("usage_limit")
-    if not isinstance(code, str) or not isinstance(usage_limit, int):
+    per_user_usage_limit = data.get("per_user_usage_limit")
+    expires_at = data.get("expires_at")
+    if not isinstance(code, str) or not isinstance(usage_limit, int) or not isinstance(per_user_usage_limit, int):
         await state.clear()
         await message.answer("اطلاعات کد تخفیف معتبر نیست.")
         return
@@ -634,7 +695,7 @@ async def create_discount_finish(message: Message, state: FSMContext) -> None:
         return
     try:
         discount_amount = DiscountCodeService.parse_positive_int(message.text, "مبلغ تخفیف باید عدد مثبت باشد.")
-        discount = await DiscountCodeService.create_discount(code, usage_limit, discount_amount)
+        discount = await DiscountCodeService.create_discount(code, usage_limit, per_user_usage_limit, discount_amount, expires_at)
     except ValueError as exc:
         await message.answer(str(exc))
         return
@@ -806,6 +867,7 @@ async def _discount_list_text() -> str:
     blocks: list[str] = []
     for discount in discounts:
         user_ids = "\n".join(str(usage.user_id) for usage in discount.usages) or "-"
+        expiry = discount.expires_at.strftime("%Y-%m-%d") if discount.expires_at else "بدون انقضا"
         blocks.append(
             "کد:\n"
             f"{escape(discount.code)}\n\n"
@@ -813,6 +875,10 @@ async def _discount_list_text() -> str:
             f"{discount.discount_amount} تومان\n\n"
             "استفاده:\n"
             f"{discount.used_count} / {discount.usage_limit}\n\n"
+            "محدودیت هر کاربر:\n"
+            f"{discount.per_user_usage_limit} بار\n\n"
+            "انقضا:\n"
+            f"{expiry}\n\n"
             "Users:\n\n"
             f"{user_ids}"
         )
