@@ -12,6 +12,11 @@ class ServiceStates(StatesGroup):
 class PlanStates(StatesGroup):
     waiting_for_name = State()
     waiting_for_price = State()
+    waiting_for_inbound_id = State()
+    waiting_for_protocol = State()
+    waiting_for_inbound_port = State()
+    waiting_for_traffic_limit = State()
+    waiting_for_duration_days = State()
 
 
 class BankCardStates(StatesGroup):
@@ -35,3 +40,23 @@ class AdminOrderStates(StatesGroup):
 
 class BroadcastStates(StatesGroup):
     waiting_for_message = State()
+
+
+class RechargePackageStates(StatesGroup):
+    waiting_for_title = State()
+    waiting_for_amount = State()
+
+
+class InboundStates(StatesGroup):
+    waiting_for_protocol = State()
+    waiting_for_port = State()
+    waiting_for_remark = State()
+    waiting_for_network = State()
+    waiting_for_security = State()
+    waiting_for_total_gb = State()
+    waiting_for_expire_days = State()
+
+
+class GiveMoneyStates(StatesGroup):
+    waiting_for_username = State()
+    waiting_for_amount = State()

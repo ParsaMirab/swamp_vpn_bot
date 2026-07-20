@@ -1,15 +1,19 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from html import escape
 from math import ceil
+from uuid import uuid4
 
-from sqlalchemy import func, select, update
+from sqlalchemy import case, func, select, update
 from sqlalchemy.orm import selectinload
 
 from bot.database.base import async_session_factory
 from bot.database.models import Order
+
+order_logger = logging.getLogger("order")
 
 
 @dataclass(frozen=True)
@@ -21,6 +25,7 @@ class OrderPage:
     page_size: int
     status: str | None = None
     requested_page: int = 1
+    sort: str = "newest"
 
     @property
     def is_out_of_range(self) -> bool:
@@ -31,16 +36,24 @@ class OrderService:
     pending = "pending"
     approved = "approved"
     rejected = "rejected"
+    completed = "completed"
+    failed = "failed"
     page_size = 10
     filter_all = "all"
     filter_approved = "approved"
     filter_pending = "pending"
     filter_rejected = "rejected"
+    filter_completed = "completed"
+    filter_failed = "failed"
+    sort_newest = "newest"
+    sort_oldest = "oldest"
     order_filters = {
         filter_all: None,
         filter_approved: approved,
         filter_pending: pending,
         filter_rejected: rejected,
+        filter_completed: completed,
+        filter_failed: failed,
     }
 
     @staticmethod
@@ -52,6 +65,7 @@ class OrderService:
         final_price: int,
         discount_id: int | None = None,
         receipt_file_id: str | None = None,
+        payment_type: str = "wallet",
     ) -> Order:
         async with async_session_factory() as session:
             order = Order(
@@ -63,6 +77,7 @@ class OrderService:
                 final_price=final_price,
                 receipt_file_id=receipt_file_id,
                 status=OrderService.pending,
+                payment_type=payment_type,
             )
             session.add(order)
             await session.commit()
@@ -70,6 +85,79 @@ class OrderService:
             if stored_order is None:
                 raise RuntimeError("Order was created but could not be loaded.")
             return stored_order
+
+    @staticmethod
+    async def create_wallet_order(
+        user_id: int,
+        service_id: int,
+        plan_id: int,
+        original_price: int,
+        final_price: int,
+        discount_id: int | None = None,
+    ) -> Order:
+        idempotency_key = f"{user_id}:{plan_id}:{int(datetime.now(timezone.utc).timestamp())}"
+
+        async with async_session_factory() as session:
+            existing = await session.execute(
+                select(Order).where(Order.idempotency_key == idempotency_key)
+            )
+            if existing.scalar_one_or_none():
+                raise ValueError("سفارش قبلاً ثبت شده است.")
+
+            order = Order(
+                user_id=user_id,
+                service_id=service_id,
+                plan_id=plan_id,
+                discount_id=discount_id,
+                original_price=original_price,
+                final_price=final_price,
+                status=OrderService.pending,
+                payment_type="wallet",
+                idempotency_key=idempotency_key,
+            )
+            session.add(order)
+            await session.commit()
+
+            order_logger.info(
+                "ORDER_CREATED user=%s order_id=%d amount=%d payment=wallet",
+                user_id, order.id, final_price,
+            )
+            return await OrderService.get_order(order.id)
+
+    @staticmethod
+    async def complete_order(order_id: int, sub_link: str, config_text: str = "") -> Order | None:
+        async with async_session_factory() as session:
+            result = await session.execute(
+                update(Order)
+                .where(Order.id == order_id)
+                .values(
+                    status=OrderService.completed,
+                    sub_link=sub_link,
+                    config_text=config_text,
+                    approved_at=datetime.now(timezone.utc),
+                )
+            )
+            await session.commit()
+            if not result.rowcount:
+                return None
+
+            order_logger.info("ORDER_COMPLETED order_id=%d", order_id)
+            return await OrderService.get_order(order_id)
+
+    @staticmethod
+    async def fail_order(order_id: int) -> Order | None:
+        async with async_session_factory() as session:
+            result = await session.execute(
+                update(Order)
+                .where(Order.id == order_id)
+                .values(status=OrderService.failed)
+            )
+            await session.commit()
+            if not result.rowcount:
+                return None
+
+            order_logger.warning("ORDER_FAILED order_id=%d", order_id)
+            return await OrderService.get_order(order_id)
 
     @staticmethod
     async def attach_receipt(order_id: int, user_id: int, receipt_file_id: str) -> Order | None:
@@ -110,13 +198,15 @@ class OrderService:
         return order_page.orders, order_page.total_count
 
     @staticmethod
-    async def list_orders_paged(order_filter: str = filter_all, page: int = 1) -> OrderPage:
+    async def list_orders_paged(order_filter: str = filter_all, page: int = 1, sort: str = "newest") -> OrderPage:
         status = OrderService.order_filters.get(order_filter)
         requested_page = page
         normalized_page = max(page, 1)
         async with async_session_factory() as session:
             count_query = select(func.count(Order.id))
-            if status is not None:
+            if order_filter == OrderService.filter_approved:
+                count_query = count_query.where(Order.status.in_([OrderService.approved, OrderService.completed]))
+            elif status is not None:
                 count_query = count_query.where(Order.status == status)
             count_result = await session.execute(count_query)
             total_count = int(count_result.scalar_one())
@@ -126,21 +216,23 @@ class OrderService:
             elif total_count == 0:
                 normalized_page = 1
 
+            order_clause = Order.id.desc() if sort == OrderService.sort_newest else Order.id.asc()
+
             query = (
                 select(Order)
                 .options(
                     selectinload(Order.service),
                     selectinload(Order.plan),
                 )
-                .order_by(Order.id.asc())
+                .order_by(order_clause)
                 .offset((normalized_page - 1) * OrderService.page_size)
                 .limit(OrderService.page_size)
             )
-            if status is not None:
+            if order_filter == OrderService.filter_approved:
+                query = query.where(Order.status.in_([OrderService.approved, OrderService.completed]))
+            elif status is not None:
                 query = query.where(Order.status == status)
-            result = await session.execute(
-                query
-            )
+            result = await session.execute(query)
             return OrderPage(
                 orders=list(result.scalars().all()),
                 total_count=total_count,
@@ -149,6 +241,7 @@ class OrderService:
                 page_size=OrderService.page_size,
                 status=status,
                 requested_page=requested_page,
+                sort=sort,
             )
 
     @staticmethod
@@ -211,6 +304,8 @@ class OrderService:
             OrderService.pending: "در انتظار بررسی",
             OrderService.approved: "تایید شده",
             OrderService.rejected: "رد شده",
+            OrderService.completed: "تکمیل شده",
+            OrderService.failed: "ناموفق",
         }
         return labels.get(status, status)
 
@@ -221,19 +316,23 @@ class OrderService:
             OrderService.filter_approved: "سفارش‌های تایید شده",
             OrderService.filter_pending: "سفارش‌های درحال پیگیری",
             OrderService.filter_rejected: "سفارش‌های رد شده",
+            OrderService.filter_completed: "سفارش‌های تکمیل شده",
+            OrderService.filter_failed: "سفارش‌های ناموفق",
         }
         return labels.get(order_filter, "سفارش‌ها")
 
     @staticmethod
     def admin_notification_text(order: Order) -> str:
+        service_name = escape(order.service.name) if order.service else "حذف شده"
+        plan_name = escape(order.plan.name) if order.plan else "حذف شده"
         return (
             "سفارش جدید\n\n"
             "خریدار:\n"
             f"{order.user_id}\n\n"
             "سرویس:\n"
-            f"{escape(order.service.name)}\n\n"
+            f"{service_name}\n\n"
             "پلن:\n"
-            f"{escape(order.plan.name)}\n\n"
+            f"{plan_name}\n\n"
             "مبلغ:\n"
             f"{order.final_price:,} تومان\n\n"
             "شماره سفارش:\n"
@@ -242,22 +341,27 @@ class OrderService:
 
     @staticmethod
     def admin_details_text(order: Order) -> str:
+        payment_label = "کیف پول" if order.payment_type == "wallet" else "کارت به کارت"
+        service_name = escape(order.service.name) if order.service else "حذف شده"
+        plan_name = escape(order.plan.name) if order.plan else "حذف شده"
         text = (
             f"سفارش: {order.id}\n\n"
             "کاربر:\n"
             f"{order.user_id}\n\n"
             "سرویس:\n"
-            f"{escape(order.service.name)}\n\n"
+            f"{service_name}\n\n"
             "پلن:\n"
-            f"{escape(order.plan.name)}\n\n"
+            f"{plan_name}\n\n"
             "قیمت:\n"
             f"{order.final_price:,} تومان\n\n"
+            "نوع پرداخت:\n"
+            f"{payment_label}\n\n"
             "تاریخ:\n"
             f"{order.created_at}\n\n"
             "وضعیت:\n"
             f"{OrderService.status_label(order.status)}"
         )
-        if order.status == OrderService.approved:
+        if order.status in (OrderService.approved, OrderService.completed):
             text += (
                 "\n\nلینک اشتراک:\n"
                 f"{order.sub_link or 'ندارد'}\n\n"
@@ -268,13 +372,15 @@ class OrderService:
 
     @staticmethod
     def user_details_text(order: Order) -> str:
+        service_name = escape(order.service.name) if order.service else "حذف شده"
+        plan_name = escape(order.plan.name) if order.plan else "حذف شده"
         text = (
             "سفارش:\n"
             f"{order.id}\n\n"
             "سرویس:\n"
-            f"{escape(order.service.name)}\n\n"
+            f"{service_name}\n\n"
             "پلن:\n"
-            f"{escape(order.plan.name)}\n\n"
+            f"{plan_name}\n\n"
             "مبلغ:\n"
             f"{order.final_price:,} تومان\n\n"
             "وضعیت:\n"
@@ -284,13 +390,15 @@ class OrderService:
             return text + "⏳ سفارش شما در حال بررسی است."
         if order.status == OrderService.rejected:
             return text + "❌ سفارش شما رد شده است."
-        if order.status == OrderService.approved:
+        if order.status == OrderService.failed:
+            return text + "❌ سفارش ناموفق بوده است."
+        if order.status in (OrderService.approved, OrderService.completed):
             return (
                 text
-                + "✅ سفارش تایید شده است.\n\n"
+                + "✅ سفارش تکمیل شده است.\n\n"
                 + "🔗 لینک اشتراک:\n"
-                f"{order.sub_link or 'ندارد'}\n\n"
+                f"<code>{order.sub_link or 'ندارد'}</code>\n\n"
                 + "📄 کانفیگ:\n"
-                f"{order.config_text or 'ندارد'}"
+                f"<code>{order.config_text or 'ندارد'}</code>"
             )
         return text

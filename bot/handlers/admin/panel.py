@@ -2,13 +2,13 @@ import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 from html import escape
+from pathlib import Path
 
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
-from aiogram.types import FSInputFile
+from aiogram.types import CallbackQuery, Message, FSInputFile
 
 from bot.config import settings
 from bot.filters.admin import AdminFilter
@@ -19,6 +19,7 @@ from bot.keyboards.admin import (
     admin_orders_menu_keyboard,
     admin_orders_keyboard,
     admin_panel_keyboard,
+    card_to_card_notification_keyboard,
     delete_cards_keyboard,
     delete_channels_keyboard,
     delete_discounts_keyboard,
@@ -30,6 +31,15 @@ from bot.keyboards.admin import (
     plan_management_keyboard,
     plan_services_keyboard,
     service_management_keyboard,
+    wallet_management_keyboard,
+    recharge_package_management_keyboard,
+    delete_recharge_packages_keyboard,
+    toggle_recharge_packages_keyboard,
+    pending_transactions_keyboard,
+    transaction_details_keyboard,
+    inbound_management_keyboard,
+    inbound_list_keyboard,
+    delete_inbounds_keyboard,
 )
 from bot.services.bank_card_service import BankCardService
 from bot.services.discount_service import DiscountCodeService
@@ -39,9 +49,12 @@ from bot.services.plan_service import PlanService
 from bot.services.required_channel_service import RequiredChannelService
 from bot.services.service_service import ServiceService
 from bot.services.setting_service import SettingService
-from bot.states.admin import AdminOrderStates, BankCardStates, DiscountCodeStates, JoinRequireStates, PlanStates, ServiceStates, BroadcastStates
+from bot.services.wallet_service import WalletService
+from bot.services.sanaei_service import SanaeiService
+from bot.states.admin import AdminOrderStates, BankCardStates, DiscountCodeStates, GiveMoneyStates, JoinRequireStates, PlanStates, ServiceStates, BroadcastStates, RechargePackageStates, InboundStates
 
 router = Router(name="admin_panel")
+ASSETS_DIR = Path(__file__).resolve().parent.parent.parent.parent / "assets"
 
 
 @router.message(Command("admin"))
@@ -84,14 +97,14 @@ async def orders_panel(callback: CallbackQuery, state: FSMContext) -> None:
         await callback.message.edit_text("سفارش‌ها", reply_markup=admin_orders_menu_keyboard())
 
 
-@router.callback_query(AdminFilter(), F.data.regexp(r"^orders:(all|approved|pending|rejected):page:\d+$"))
+@router.callback_query(AdminFilter(), F.data.regexp(r"^orders:(all|approved|pending|rejected|completed|failed):page:\d+:(newest|oldest)$"))
 async def orders_page(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
-    order_filter, page = _parse_orders_page_callback(callback.data)
+    order_filter, page, sort = _parse_orders_page_callback(callback.data)
     if order_filter is None or page is None:
         await callback.answer("صفحه نامعتبر است.", show_alert=True)
         return
-    await _answer_orders_page(callback, order_filter=order_filter, page=page)
+    await _answer_orders_page(callback, order_filter=order_filter, page=page, sort=sort)
 
 
 @router.callback_query(AdminFilter(), F.data == AdminCallback.orders_search)
@@ -117,7 +130,8 @@ async def order_search_finish(message: Message, state: FSMContext) -> None:
         reply_markup=admin_order_details_keyboard(
             order.id,
             order.status,
-            back_callback="orders:all:page:1"
+            payment_type=order.payment_type,
+            back_callback="orders:all:page:1:newest"
         )
     )
 
@@ -147,121 +161,12 @@ async def order_details(callback: CallbackQuery, state: FSMContext) -> None:
 @router.callback_query(AdminFilter(), F.data.startswith("orders:view:"))
 async def order_details_from_list(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
-    order_filter, page, order_id = _parse_order_view_callback(callback.data)
+    order_filter, page, order_id, sort = _parse_order_view_callback(callback.data)
     if order_filter is None or page is None or order_id is None:
         await callback.answer()
         return
-    await _answer_order_details(callback, order_id, back_callback=f"orders:{order_filter}:page:{page}")
-
-
-@router.callback_query(AdminFilter(), F.data.startswith("admin:orders:approve:"))
-async def approve_order_start(callback: CallbackQuery, state: FSMContext) -> None:
-    order_id = _parse_callback_int(callback.data)
-    if order_id is None:
-        await callback.answer()
-        return
-    order = await OrderService.get_order(order_id)
-    if order is None:
-        await callback.answer("سفارش پیدا نشد", show_alert=True)
-        return
-    await state.set_state(AdminOrderStates.waiting_for_sub_link)
-    await state.update_data(order_id=order_id)
-    await callback.answer()
-    if callback.message:
-        await callback.message.answer("لینک اشتراک را ارسال کنید (در صورت نداشتن، «ندارد» را ارسال کنید)")
-
-
-@router.message(AdminFilter(), AdminOrderStates.waiting_for_sub_link)
-async def approve_order_sub_link(message: Message, state: FSMContext) -> None:
-    data = await state.get_data()
-    order_id = data.get("order_id")
-    if not isinstance(order_id, int):
-        await state.clear()
-        await message.answer("سفارش معتبر نیست.")
-        return
-    if not message.text:
-        await message.answer("لینک اشتراک را ارسال کنید.")
-        return
-    await state.update_data(sub_link=message.text.strip())
-    await state.set_state(AdminOrderStates.waiting_for_config)
-    await message.answer("کانفیگ را ارسال کنید (در صورت نداشتن، «ندارد» را ارسال کنید)")
-
-
-@router.message(AdminFilter(), AdminOrderStates.waiting_for_config)
-async def approve_order_finish(message: Message, state: FSMContext, bot: Bot) -> None:
-    data = await state.get_data()
-    order_id = data.get("order_id")
-    sub_link = data.get("sub_link")
-    if not isinstance(order_id, int) or not isinstance(sub_link, str):
-        await state.clear()
-        await message.answer("سفارش معتبر نیست.")
-        return
-    if not message.text:
-        await message.answer("کانفیگ را ارسال کنید.")
-        return
-
-    try:
-        order = await OrderService.approve_order(
-            order_id=order_id,
-            sub_link=sub_link,
-            config_text=message.text.strip(),
-        )
-    except ValueError as exc:
-        await message.answer(str(exc))
-        return
-    await state.clear()
-    if order is None:
-        await message.answer("سفارش پیدا نشد.")
-        return
-
-    try:
-        photo = FSInputFile("assets/order_approved.jpg")
-
-        caption = "🎉 سفارش شما با موفقیت تایید شد.\n\n"
-        caption += f"📡 لینک ساب:\n<code>{order.sub_link or 'ندارد'}</code>\n\n"
-        caption += f"📋 کانفیگ:\n<code>{order.config_text or 'ندارد'}</code>\n\n"
-        caption += "💾 از بخش «سفارش‌های من» می‌توانید در هر زمان مجدداً اطلاعات سرویس خود را مشاهده کنید."
-
-        await bot.send_photo(
-            chat_id=order.user_id,
-            photo=photo,
-            caption=caption,
-        )
-
-        await message.answer("سفارش تایید شد و اطلاعات برای خریدار ارسال شد.")
-
-    except TelegramAPIError as e:
-        await message.answer(f"خطا در ارسال پیام به خریدار: {e}")
-
-
-@router.callback_query(AdminFilter(), F.data.startswith("admin:orders:reject:"))
-async def reject_order(callback: CallbackQuery, state: FSMContext, bot: Bot) -> None:
-    await state.clear()
-    order_id = _parse_callback_int(callback.data)
-    if order_id is None:
-        await callback.answer()
-        return
-    order = await OrderService.reject_order(order_id)
-    if order is None:
-        await callback.answer("سفارش پیدا نشد", show_alert=True)
-        return
-    try:
-        await bot.send_message(
-            chat_id=order.user_id,
-            text="❌ سفارش شما رد شد.\n\nدر صورت وجود مشکل با پشتیبانی تماس بگیرید.",
-        )
-    except TelegramAPIError:
-        pass
-    await callback.answer("سفارش رد شد")
-
-    if callback.message:
-        await callback.message.edit_text(
-            OrderService.admin_details_text(order),
-            reply_markup=admin_order_details_keyboard(
-                order.id,
-                order.status,
-            ),
-        )
+    sort = sort or "newest"
+    await _answer_order_details(callback, order_id, back_callback=f"orders:{order_filter}:page:{page}:{sort}")
 
 
 @router.callback_query(AdminFilter(), F.data == AdminCallback.back)
@@ -451,7 +356,7 @@ async def add_plan_start(callback: CallbackQuery, state: FSMContext) -> None:
     await state.update_data(service_id=service_id)
     await callback.answer()
     if callback.message:
-        await callback.message.answer("نام پلن را ارسال کنید")
+        await callback.message.answer("نام پلن را ارسال کنید\n(مثلاً: 50 گیگ 30 روزه)")
 
 
 @router.message(AdminFilter(), PlanStates.waiting_for_name)
@@ -466,29 +371,155 @@ async def add_plan_name(message: Message, state: FSMContext) -> None:
         return
     await state.update_data(plan_name=plan_name)
     await state.set_state(PlanStates.waiting_for_price)
-    await message.answer("قیمت پلن را ارسال کنید")
+    await message.answer("قیمت پلن به تومان را ارسال کنید")
 
 
 @router.message(AdminFilter(), PlanStates.waiting_for_price)
-async def add_plan_finish(message: Message, state: FSMContext) -> None:
-    data = await state.get_data()
-    service_id = data.get("service_id")
-    plan_name = data.get("plan_name")
-    if not isinstance(service_id, int) or not isinstance(plan_name, str):
-        await state.clear()
-        await message.answer("سرویس انتخاب‌شده معتبر نیست.")
-        return
+async def add_plan_price(message: Message, state: FSMContext) -> None:
     if not message.text:
         await message.answer("قیمت پلن را به‌صورت عدد ارسال کنید.")
         return
     try:
         price = PlanService.parse_price(message.text)
-        plan = await PlanService.create_plan(service_id=service_id, name=plan_name, price=price)
+    except ValueError as exc:
+        await message.answer(str(exc))
+        return
+    await state.update_data(plan_price=price)
+    await state.set_state(PlanStates.waiting_for_inbound_id)
+    await message.answer(
+        "شناسه Inbound در پنل 3x-ui را ارسال کنید\n"
+        "یا عدد 0 بزنید تا Inbound جدید خودکار ساخته شود"
+    )
+
+
+@router.message(AdminFilter(), PlanStates.waiting_for_inbound_id)
+async def add_plan_inbound_id(message: Message, state: FSMContext) -> None:
+    if not message.text or not message.text.strip().isdigit():
+        await message.answer("شناسه Inbound را به‌صورت عدد ارسال کنید (0 برای ساخت خودکار).")
+        return
+    inbound_id = int(message.text.strip())
+    if inbound_id == 0:
+        await state.set_state(PlanStates.waiting_for_protocol)
+        await message.answer(
+            "پروتکل Inbound را انتخاب کنید:\n\n"
+            "vless\n"
+            "vmess\n"
+            "trojan\n\n"
+            "نام پروتکل را تایپ کنید:"
+        )
+    else:
+        await state.update_data(plan_inbound_id=inbound_id)
+        await state.set_state(PlanStates.waiting_for_traffic_limit)
+        await message.answer("محدودیت ترافیک به گیگابایت را ارسال کنید (0 برای نامحدود)")
+
+
+@router.message(AdminFilter(), PlanStates.waiting_for_protocol)
+async def add_plan_protocol(message: Message, state: FSMContext) -> None:
+    if not message.text:
+        await message.answer("پروتکل را به‌صورت متن ارسال کنید.")
+        return
+    protocol = message.text.strip().lower()
+    if protocol not in ("vless", "vmess", "trojan"):
+        await message.answer("پروتکل نامعتبر است. فقط vless, vmess, trojan مجاز است.")
+        return
+    await state.update_data(plan_protocol=protocol)
+    await state.set_state(PlanStates.waiting_for_inbound_port)
+    await message.answer("پورت Inbound را ارسال کنید\n(مثلاً: 52704)")
+
+
+@router.message(AdminFilter(), PlanStates.waiting_for_inbound_port)
+async def add_plan_inbound_port(message: Message, state: FSMContext) -> None:
+    if not message.text or not message.text.strip().isdigit():
+        await message.answer("پورت را به‌صورت عدد ارسال کنید.")
+        return
+    port = int(message.text.strip())
+    if port < 1 or port > 65535:
+        await message.answer("پورت باید بین 1 تا 65535 باشد.")
+        return
+    await state.update_data(plan_inbound_port=port)
+    await state.set_state(PlanStates.waiting_for_traffic_limit)
+    await message.answer(
+        "محدودیت ترافیک هر کاربر به گیگابایت را ارسال کنید\n"
+        "(0 برای نامحدود)"
+    )
+
+
+@router.message(AdminFilter(), PlanStates.waiting_for_traffic_limit)
+async def add_plan_traffic_limit(message: Message, state: FSMContext) -> None:
+    if not message.text or not message.text.strip().isdigit():
+        await message.answer("محدودیت ترافیک را به‌صورت عدد ارسال کنید (0 برای نامحدود).")
+        return
+    await state.update_data(plan_traffic_limit=int(message.text.strip()))
+    await state.set_state(PlanStates.waiting_for_duration_days)
+    await message.answer("مدت اعتبار اکانت به روز را ارسال کنید (پیش‌فرض: 30)")
+
+
+@router.message(AdminFilter(), PlanStates.waiting_for_duration_days)
+async def add_plan_finish(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    service_id = data.get("service_id")
+    plan_name = data.get("plan_name")
+    plan_price = data.get("plan_price")
+    plan_inbound_id = data.get("plan_inbound_id")
+    plan_protocol = data.get("plan_protocol")
+    plan_inbound_port = data.get("plan_inbound_port")
+    plan_traffic_limit = data.get("plan_traffic_limit", 0)
+    if not isinstance(service_id, int) or not isinstance(plan_name, str) or not isinstance(plan_price, int):
+        await state.clear()
+        await message.answer("اطلاعات پلن ناقص است.")
+        return
+    if not isinstance(plan_traffic_limit, int):
+        plan_traffic_limit = 0
+    duration_days = 30
+    if message.text and message.text.strip().isdigit():
+        duration_days = int(message.text.strip())
+    if duration_days <= 0:
+        duration_days = 30
+    if plan_protocol and isinstance(plan_inbound_port, int):
+        sanaei = SanaeiService(api_key=settings.sanaei_api_key, base_url=settings.sanaei_base_url)
+        try:
+            inbound_result = await sanaei.create_inbound(
+                protocol=plan_protocol,
+                port=plan_inbound_port,
+                remark=f"{plan_name} - {plan_protocol.upper()}",
+                network="tcp",
+                security="none",
+                total_gb=plan_traffic_limit if plan_traffic_limit > 0 else 0,
+                expire_days=duration_days,
+            )
+            plan_inbound_id = inbound_result.get("id")
+        except Exception as e:
+            await state.clear()
+            await message.answer(f"خطا در ساخت Inbound: {e}")
+            return
+    if not isinstance(plan_inbound_id, int):
+        await state.clear()
+        await message.answer("شناسه Inbound نامعتبر است.")
+        return
+    try:
+        plan = await PlanService.create_plan(
+            service_id=service_id,
+            name=plan_name,
+            price=plan_price,
+            inbound_id=plan_inbound_id,
+            traffic_limit_gb=plan_traffic_limit,
+            duration_days=duration_days,
+        )
     except ValueError as exc:
         await message.answer(str(exc))
         return
     await state.clear()
-    await message.answer(f"پلن «{escape(plan.name)}» با قیمت {plan.price:,} تومان ذخیره شد.")
+    inbound_info = f"Inbound ID: {plan.inbound_id}" if plan.inbound_id else ""
+    if plan_protocol:
+        inbound_info = f"Protocol: {plan_protocol.upper()} | Port: {plan_inbound_port}"
+    await message.answer(
+        f"✅ پلن ذخیره شد\n\n"
+        f"نام: {escape(plan.name)}\n"
+        f"قیمت: {plan.price:,} تومان\n"
+        f"{inbound_info}\n"
+        f"حجم: {'نامحدود' if plan.traffic_limit_gb == 0 else f'{plan.traffic_limit_gb} گیگ'}\n"
+        f"مدت: {plan.duration_days} روز"
+    )
     service = await ServiceService.get_service(service_id)
     if service is not None:
         plan_count = await PlanService.count_plans(service_id)
@@ -884,9 +915,10 @@ async def _answer_orders_page(
     callback: CallbackQuery,
     order_filter: str,
     page: int,
+    sort: str = "newest",
     answer_text: str | None = None,
 ) -> None:
-    order_page = await OrderService.list_orders_paged(order_filter, page)
+    order_page = await OrderService.list_orders_paged(order_filter, page, sort=sort)
     if order_page.is_out_of_range:
         answer_text = answer_text or "صفحه نامعتبر بود."
     await callback.answer(answer_text, show_alert=order_page.is_out_of_range)
@@ -907,14 +939,16 @@ def _admin_orders_page_text(
     order_page: OrderPage,
     order_filter: str,
 ) -> str:
+    sort_label = "جدیدترین" if order_page.sort == "newest" else "قدیمی‌ترین"
     return (
         f"{OrderService.order_filter_label(order_filter)}\n\n"
         f"تعداد سفارش‌ها: {order_page.total_count}\n"
-        f"صفحه {order_page.page} از {order_page.page_count}\n\n"
+        f"صفحه {order_page.page} از {order_page.page_count}\n"
+        f"مرتب‌سازی: {sort_label}\n\n"
         "برای مشاهده جزئیات، یکی از سفارش‌ها را انتخاب کنید."
     )
 
-async def _answer_order_details(callback: CallbackQuery, order_id: int, back_callback: str = "orders:all:page:1") -> None:
+async def _answer_order_details(callback: CallbackQuery, order_id: int, back_callback: str = "orders:all:page:1:newest") -> None:
     order = await OrderService.get_order(order_id)
     if order is None:
         await callback.answer("سفارش پیدا نشد", show_alert=True)
@@ -924,13 +958,243 @@ async def _answer_order_details(callback: CallbackQuery, order_id: int, back_cal
         return
     if order.receipt_file_id:
         await callback.message.answer_photo(photo=order.receipt_file_id, caption="فیش پرداخت")
-    await callback.message.edit_text(
-        OrderService.admin_details_text(order),
-        reply_markup=admin_order_details_keyboard(
-            order.id,
-            order.status,
-            back_callback=back_callback
-        )    )
+    order_text = OrderService.admin_details_text(order)
+    keyboard = admin_order_details_keyboard(
+        order.id,
+        order.status,
+        payment_type=order.payment_type,
+        back_callback=back_callback,
+    )
+    try:
+        await callback.message.edit_text(order_text, reply_markup=keyboard)
+    except TelegramBadRequest:
+        await callback.message.answer(order_text, reply_markup=keyboard)
+
+
+@router.callback_query(AdminFilter(), F.data.startswith("admin:orders:approve:"))
+async def approve_card_to_card_order(callback: CallbackQuery, state: FSMContext, bot: Bot) -> None:
+    await state.clear()
+    order_id = _parse_callback_int(callback.data)
+    if order_id is None:
+        await callback.answer()
+        return
+    order = await OrderService.get_order(order_id)
+    if order is None:
+        await callback.answer("سفارش پیدا نشد", show_alert=True)
+        return
+    if order.status != "pending":
+        await callback.answer("این سفارش قبلاً بررسی شده است.", show_alert=True)
+        return
+    if order.payment_type != "card_to_card":
+        await callback.answer("این سفارش مربوط به پرداخت کارت به کارت نیست.", show_alert=True)
+        return
+
+    plan = await PlanService.get_plan(plan_id=order.plan_id, service_id=order.service_id)
+    if plan is None or not plan.inbound_id:
+        await callback.answer("پلن یا Inbound آن یافت نشد.", show_alert=True)
+        return
+
+    status_msg = await callback.message.answer("⏳ در حال پردازش و ساخت اکانت...") if callback.message else None
+
+    try:
+        sanaei = SanaeiService(
+            api_key=settings.sanaei_api_key,
+            base_url=settings.sanaei_base_url,
+        )
+        result = await sanaei.create_user(
+            inbound_id=plan.inbound_id,
+            traffic_gb=plan.traffic_limit_gb,
+            duration_days=plan.duration_days,
+        )
+        await asyncio.sleep(5)
+        links = await sanaei.get_config(result["email"])
+        sub_link = "\n".join(links) if links else ""
+        sub_url = sanaei.get_sub_url(result["email"])
+        config_text = result["email"]
+        await OrderService.complete_order(order.id, sub_link=sub_link, config_text=config_text)
+
+        if status_msg:
+            try:
+                await status_msg.delete()
+            except Exception:
+                pass
+
+        link_text = "\n".join(links[:3]) if links else "ندارد"
+        user_caption = (
+            f"✅ سفارش شما تایید و اکانت ساخته شد.\n\n"
+            f"🔗 لینک اشتراک:\n<code>{escape(sub_url)}</code>\n\n"
+            f"⚙️ کانفیگ‌ها:\n<code>{escape(link_text)}</code>\n\n"
+            f"💾 از بخش «سفارش‌های من» می‌توانید در هر زمان مجدداً اطلاعات سرویس خود را مشاهده کنید."
+        )
+        photo_path = ASSETS_DIR / "order_approved.jpg"
+        try:
+            if photo_path.exists():
+                photo = FSInputFile(photo_path)
+                await bot.send_photo(
+                    chat_id=order.user_id,
+                    photo=photo,
+                    caption=user_caption,
+                )
+            else:
+                await bot.send_message(chat_id=order.user_id, text=user_caption)
+        except TelegramAPIError:
+            pass
+
+        await callback.answer("سفارش تایید و اکانت ساخته شد")
+        updated_order = await OrderService.get_order(order_id)
+        if callback.message and updated_order:
+            await callback.message.edit_text(
+                OrderService.admin_details_text(updated_order),
+                reply_markup=admin_order_details_keyboard(
+                    updated_order.id,
+                    updated_order.status,
+                    payment_type=updated_order.payment_type,
+                )
+            )
+    except Exception as e:
+        if status_msg:
+            try:
+                await status_msg.delete()
+            except Exception:
+                pass
+        try:
+            await OrderService.fail_order(order.id)
+        except Exception:
+            pass
+        try:
+            await bot.send_message(
+                chat_id=order.user_id,
+                text=f"❌ خطا در پردازش سفارش شما.\n\nخطا: {escape(str(e))}\n\nلطفاً با پشتیبانی تماس بگیرید.",
+            )
+        except TelegramAPIError:
+            pass
+        await callback.answer("خطا در پردازش سفارش", show_alert=True)
+
+
+@router.callback_query(AdminFilter(), F.data.startswith("admin:orders:reject:"))
+async def reject_card_to_card_order(callback: CallbackQuery, state: FSMContext, bot: Bot) -> None:
+    await state.clear()
+    order_id = _parse_callback_int(callback.data)
+    if order_id is None:
+        await callback.answer()
+        return
+    order = await OrderService.get_order(order_id)
+    if order is None:
+        await callback.answer("سفارش پیدا نشد", show_alert=True)
+        return
+    if order.status != "pending":
+        await callback.answer("این سفارش قبلاً بررسی شده است.", show_alert=True)
+        return
+    if order.payment_type != "card_to_card":
+        await callback.answer("این سفارش مربوط به پرداخت کارت به کارت نیست.", show_alert=True)
+        return
+
+    rejected = await OrderService.reject_order(order.id)
+    if rejected is None:
+        await callback.answer("خطا در رد سفارش", show_alert=True)
+        return
+
+    try:
+        await bot.send_message(
+            chat_id=order.user_id,
+            text=(
+                f"❌ سفارش #{order.id} شما رد شد.\n\n"
+                f"مبلغ: {order.final_price:,} تومان\n\n"
+                "در صورت وجود مشکل با پشتیبانی تماس بگیرید."
+            ),
+        )
+    except TelegramAPIError:
+        pass
+
+    await callback.answer("سفارش رد شد")
+    updated_order = await OrderService.get_order(order_id)
+    if callback.message and updated_order:
+        await callback.message.edit_text(
+            OrderService.admin_details_text(updated_order),
+            reply_markup=admin_order_details_keyboard(
+                updated_order.id,
+                updated_order.status,
+                payment_type=updated_order.payment_type,
+            )
+        )
+
+
+@router.callback_query(AdminFilter(), F.data == AdminCallback.give_money)
+async def give_money_start(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(GiveMoneyStates.waiting_for_username)
+    await callback.answer()
+    if callback.message:
+        await callback.message.answer(
+            "💰 شارژ کیف پول کاربر\n\n"
+            "یوزرنیم کاربر را ارسال کنید\n"
+            "(مثلاً: @username یا username)"
+        )
+
+
+@router.message(AdminFilter(), GiveMoneyStates.waiting_for_username)
+async def give_money_username(message: Message, state: FSMContext) -> None:
+    if not message.text or not message.text.strip():
+        await message.answer("یوزرنیم را به‌صورت متن ارسال کنید.")
+        return
+    username = message.text.strip()
+    user = await UserService.find_user_by_username(username)
+    if user is None:
+        await message.answer(
+            f"کاربری با یوزرنیم «{username}» پیدا نشد.\n\n"
+            "مطمئن شوید کاربر قبلاً در ربات ثبت‌نام کرده باشد."
+        )
+        return
+    await state.update_data(give_money_user_id=user.id, give_money_username=username)
+    await state.set_state(GiveMoneyStates.waiting_for_amount)
+    await message.answer(
+        f"کاربر پیدا شد:\n\n"
+        f"یوزرنیم: @{username}\n"
+        f"آیدی: {user.id}\n\n"
+        f"مبلغ شارژ به تومان را ارسال کنید"
+    )
+
+
+@router.message(AdminFilter(), GiveMoneyStates.waiting_for_amount)
+async def give_money_amount(message: Message, state: FSMContext, bot: Bot) -> None:
+    data = await state.get_data()
+    user_id = data.get("give_money_user_id")
+    username = data.get("give_money_username")
+    if not isinstance(user_id, int) or not isinstance(username, str):
+        await state.clear()
+        await message.answer("خطا در پردازش درخواست.")
+        return
+    if not message.text or not message.text.strip().isdigit():
+        await message.answer("مبلغ را به‌صورت عدد ارسال کنید.")
+        return
+    amount = int(message.text.strip())
+    if amount <= 0:
+        await message.answer("مبلغ باید عدد مثبت باشد.")
+        return
+    try:
+        transaction = await WalletService.create_credit_transaction(
+            user_id=user_id,
+            amount=amount,
+            description=f"شارژ توسط ادمین",
+        )
+        await WalletService.approve_transaction(transaction.id, settings.admin_id)
+    except Exception as e:
+        await state.clear()
+        await message.answer(f"خطا در شارژ کیف پول: {e}")
+        return
+    await state.clear()
+    balance = await WalletService.get_balance(user_id)
+    await message.answer(
+        f"✅ کیف پول کاربر @{username} با موفقیت شارژ شد.\n\n"
+        f"مبلغ: {amount:,} تومان\n"
+        f"موجودی جدید: {balance:,} تومان"
+    )
+    try:
+        await bot.send_message(
+            chat_id=user_id,
+            text=f"✅ کیف پول شما به مبلغ {amount:,} تومان توسط ادمین شارژ شد.\n\nموجودی فعلی: {balance:,} تومان",
+        )
+    except TelegramAPIError:
+        pass
 
 
 async def _answer_join_require_panel(callback: CallbackQuery, answer_text: str | None = None) -> None:
@@ -1047,22 +1311,546 @@ def _parse_callback_int(callback_data: str | None) -> int | None:
     return int(value)
 def _parse_orders_page_callback(
     callback_data: str | None,
-) -> tuple[str | None, int | None]:
+) -> tuple[str | None, int | None, str]:
     if not callback_data:
-        return None, None
+        return None, None, "newest"
 
     parts = callback_data.split(":")
 
-    if len(parts) != 4:
-        return None, None
+    if len(parts) != 5:
+        return None, None, "newest"
 
     if parts[0] != "orders":
-        return None, None
+        return None, None, "newest"
 
     if parts[2] != "page":
-        return None, None
+        return None, None, "newest"
 
     if not parts[3].isdigit():
-        return None, None
+        return None, None, "newest"
 
-    return parts[1], int(parts[3])
+    sort = parts[4] if parts[4] in ("newest", "oldest") else "newest"
+
+    return parts[1], int(parts[3]), sort
+
+
+@router.callback_query(AdminFilter(), F.data == AdminCallback.wallet)
+async def wallet_panel(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    await callback.answer()
+    if callback.message:
+        await callback.message.edit_text("مدیریت کیف پول", reply_markup=wallet_management_keyboard())
+
+
+@router.callback_query(AdminFilter(), F.data == AdminCallback.wallet_back)
+async def wallet_back(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    await callback.answer()
+    if callback.message:
+        sales_open = await SettingService.is_sales_open()
+        await callback.message.edit_text(
+            _admin_panel_text(sales_open),
+            reply_markup=admin_panel_keyboard(sales_open),
+        )
+
+
+@router.callback_query(AdminFilter(), F.data == AdminCallback.recharge_package_menu)
+async def recharge_package_panel(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    await callback.answer()
+    if callback.message:
+        await callback.message.edit_text("مدیریت پکیج شارژ", reply_markup=recharge_package_management_keyboard())
+
+
+@router.callback_query(AdminFilter(), F.data == AdminCallback.recharge_package_add)
+async def add_recharge_package_start(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(RechargePackageStates.waiting_for_title)
+    await callback.answer()
+    if callback.message:
+        await callback.message.answer("عنوان پکیج شارژ را ارسال کنید (مثلاً: شارژ 50 هزار تومانی)")
+
+
+@router.message(AdminFilter(), RechargePackageStates.waiting_for_title)
+async def add_recharge_package_title(message: Message, state: FSMContext) -> None:
+    if not message.text:
+        await message.answer("عنوان پکیج را به‌صورت متن ارسال کنید.")
+        return
+    await state.update_data(package_title=message.text.strip())
+    await state.set_state(RechargePackageStates.waiting_for_amount)
+    await message.answer("مبلغ پکیج شارژ به تومان را ارسال کنید")
+
+
+@router.message(AdminFilter(), RechargePackageStates.waiting_for_amount)
+async def add_recharge_package_finish(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    title = data.get("package_title")
+    if not isinstance(title, str):
+        await state.clear()
+        await message.answer("عنوان پکیج معتبر نیست.")
+        return
+    if not message.text:
+        await message.answer("مبلغ پکیج را به‌صورت عدد ارسال کنید.")
+        return
+    try:
+        amount = PlanService.parse_price(message.text)
+        package = await WalletService.create_package(title=title, amount=amount)
+    except ValueError as exc:
+        await message.answer(str(exc))
+        return
+    await state.clear()
+    await message.answer(f"پکیج «{escape(package.title)}» با مبلغ {package.amount:,} تومان ذخیره شد.")
+    await message.answer("مدیریت پکیج شارژ", reply_markup=recharge_package_management_keyboard())
+
+
+@router.callback_query(AdminFilter(), F.data == AdminCallback.recharge_package_delete_menu)
+async def delete_recharge_package_menu(callback: CallbackQuery) -> None:
+    packages = await WalletService.list_all_packages()
+    await callback.answer()
+    if not callback.message:
+        return
+    if not packages:
+        await callback.message.edit_text("هیچ پکیجی ثبت نشده است.", reply_markup=recharge_package_management_keyboard())
+        return
+    await callback.message.edit_text("برای حذف پکیج، یک مورد را انتخاب کنید.", reply_markup=delete_recharge_packages_keyboard(packages))
+
+
+@router.callback_query(AdminFilter(), F.data.startswith("admin:wallet:packages:delete:"))
+async def delete_recharge_package(callback: CallbackQuery) -> None:
+    package_id = _parse_callback_int(callback.data)
+    if package_id is None:
+        await callback.answer()
+        return
+    deleted = await WalletService.delete_package(package_id)
+    await callback.answer("حذف شد" if deleted else "پکیج پیدا نشد")
+    if callback.message:
+        await callback.message.edit_text("مدیریت پکیج شارژ", reply_markup=recharge_package_management_keyboard())
+
+
+@router.callback_query(AdminFilter(), F.data == AdminCallback.recharge_package_toggle)
+async def toggle_recharge_package_menu(callback: CallbackQuery) -> None:
+    packages = await WalletService.list_all_packages()
+    await callback.answer()
+    if not callback.message:
+        return
+    if not packages:
+        await callback.message.edit_text("هیچ پکیجی ثبت نشده است.", reply_markup=recharge_package_management_keyboard())
+        return
+    await callback.message.edit_text("برای فعال/غیرفعال کردن، پکیج را انتخاب کنید.", reply_markup=toggle_recharge_packages_keyboard(packages))
+
+
+@router.callback_query(AdminFilter(), F.data.startswith("admin:wallet:packages:toggle:"))
+async def toggle_recharge_package(callback: CallbackQuery) -> None:
+    package_id = _parse_callback_int(callback.data)
+    if package_id is None:
+        await callback.answer()
+        return
+    is_active = await WalletService.toggle_package(package_id)
+    if is_active is None:
+        await callback.answer("پکیج پیدا نشد", show_alert=True)
+        return
+    status = "فعال" if is_active else "غیرفعال"
+    await callback.answer(f"پکیج {status} شد")
+    packages = await WalletService.list_all_packages()
+    if callback.message:
+        await callback.message.edit_text("برای فعال/غیرفعال کردن، پکیج را انتخاب کنید.", reply_markup=toggle_recharge_packages_keyboard(packages))
+
+
+@router.callback_query(AdminFilter(), F.data == "admin:wallet:packages:list")
+async def recharge_package_list(callback: CallbackQuery) -> None:
+    packages = await WalletService.list_all_packages()
+    await callback.answer()
+    if not callback.message:
+        return
+    if not packages:
+        await callback.message.edit_text("لیست پکیج‌ها\n\nهیچ پکیجی ثبت نشده است.", reply_markup=recharge_package_management_keyboard())
+        return
+    lines = ["لیست پکیج‌های شارژ", ""]
+    for pkg in packages:
+        status = "🟢" if pkg.is_active else "🔴"
+        lines.append(f"{status} {pkg.title} - {pkg.amount:,} تومان")
+    await callback.message.edit_text("\n".join(lines), reply_markup=recharge_package_management_keyboard())
+
+
+@router.callback_query(AdminFilter(), F.data.startswith("admin:wallet:packages:back"))
+async def recharge_package_back(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    await callback.answer()
+    if callback.message:
+        await callback.message.edit_text("مدیریت کیف پول", reply_markup=wallet_management_keyboard())
+
+
+@router.callback_query(AdminFilter(), F.data == AdminCallback.pending_transactions)
+async def pending_transactions_list(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    transactions = await WalletService.list_pending_transactions()
+    await callback.answer()
+    if not callback.message:
+        return
+    if not transactions:
+        await callback.message.edit_text("هیچ تراکنش در انتظاری وجود ندارد.", reply_markup=wallet_management_keyboard())
+        return
+    await callback.message.edit_text("تراکنش‌های در انتظار بررسی:", reply_markup=pending_transactions_keyboard(transactions))
+
+
+@router.callback_query(AdminFilter(), F.data.startswith("admin:wallet:pending:view:"))
+async def view_pending_transaction(callback: CallbackQuery) -> None:
+    transaction_id = _parse_callback_int(callback.data)
+    if transaction_id is None:
+        await callback.answer()
+        return
+    transaction = await WalletService.get_transaction(transaction_id)
+    if transaction is None:
+        await callback.answer("تراکنش پیدا نشد", show_alert=True)
+        return
+    await callback.answer()
+    if not callback.message:
+        return
+    if transaction.receipt_file_id:
+        await callback.message.answer_photo(photo=transaction.receipt_file_id, caption="فیش پرداخت")
+    await callback.message.edit_text(
+        WalletService.admin_transaction_details_text(transaction),
+        reply_markup=transaction_details_keyboard(transaction.id),
+    )
+
+
+@router.callback_query(AdminFilter(), F.data.startswith("admin:wallet:view_receipt:"))
+async def view_wallet_receipt(callback: CallbackQuery) -> None:
+    transaction_id = _parse_callback_int(callback.data)
+    if transaction_id is None:
+        await callback.answer()
+        return
+    transaction = await WalletService.get_transaction(transaction_id)
+    if transaction is None:
+        await callback.answer("تراکنش پیدا نشد", show_alert=True)
+        return
+    if not transaction.receipt_file_id:
+        await callback.answer("فیش پرداختی ثبت نشده است.", show_alert=True)
+        return
+    await callback.answer()
+    if callback.message:
+        await callback.message.answer_photo(photo=transaction.receipt_file_id, caption="فیش پرداخت")
+
+
+@router.callback_query(AdminFilter(), F.data.startswith("admin:card_to_card:view_receipt:"))
+async def view_card_to_card_receipt(callback: CallbackQuery) -> None:
+    order_id = _parse_callback_int(callback.data)
+    if order_id is None:
+        await callback.answer()
+        return
+    order = await OrderService.get_order(order_id)
+    if order is None:
+        await callback.answer("سفارش پیدا نشد", show_alert=True)
+        return
+    if not order.receipt_file_id:
+        await callback.answer("فیش پرداختی ثبت نشده است.", show_alert=True)
+        return
+    await callback.answer()
+    if callback.message:
+        await callback.message.answer_photo(photo=order.receipt_file_id, caption="فیش پرداخت")
+
+
+@router.callback_query(AdminFilter(), F.data.startswith("admin:wallet:approve:"))
+async def approve_wallet_transaction(callback: CallbackQuery, state: FSMContext, bot: Bot) -> None:
+    await state.clear()
+    transaction_id = _parse_callback_int(callback.data)
+    if transaction_id is None:
+        await callback.answer()
+        return
+    if not callback.from_user:
+        await callback.answer()
+        return
+    transaction = await WalletService.approve_transaction(transaction_id, callback.from_user.id)
+    if transaction is None:
+        await callback.answer("تراکنش پیدا نشد یا قبلاً بررسی شده", show_alert=True)
+        return
+    try:
+        await bot.send_message(
+            chat_id=transaction.user_id,
+            text=await WalletService.recharge_success_text(transaction),
+        )
+    except TelegramAPIError:
+        pass
+    await callback.answer("تراکنش تایید شد")
+    if callback.message:
+        await callback.message.edit_text(
+            WalletService.admin_transaction_details_text(transaction),
+            reply_markup=transaction_details_keyboard(transaction.id),
+        )
+
+
+@router.callback_query(AdminFilter(), F.data.startswith("admin:wallet:reject:"))
+async def reject_wallet_transaction(callback: CallbackQuery, state: FSMContext, bot: Bot) -> None:
+    await state.clear()
+    transaction_id = _parse_callback_int(callback.data)
+    if transaction_id is None:
+        await callback.answer()
+        return
+    if not callback.from_user:
+        await callback.answer()
+        return
+    transaction = await WalletService.reject_transaction(transaction_id, callback.from_user.id)
+    if transaction is None:
+        await callback.answer("تراکنش پیدا نشد یا قبلاً بررسی شده", show_alert=True)
+        return
+    try:
+        await bot.send_message(
+            chat_id=transaction.user_id,
+            text=await WalletService.recharge_rejected_text(transaction),
+        )
+    except TelegramAPIError:
+        pass
+    await callback.answer("تراکنش رد شد")
+    if callback.message:
+        await callback.message.edit_text(
+            WalletService.admin_transaction_details_text(transaction),
+            reply_markup=transaction_details_keyboard(transaction.id),
+        )
+
+
+@router.callback_query(AdminFilter(), F.data.startswith("admin:wallet:pending:back"))
+async def pending_transactions_back(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    await callback.answer()
+    if callback.message:
+        await callback.message.edit_text("مدیریت کیف پول", reply_markup=wallet_management_keyboard())
+
+
+@router.callback_query(AdminFilter(), F.data == AdminCallback.inbound_management)
+async def inbound_panel(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    await callback.answer()
+    if callback.message:
+        await callback.message.edit_text("مدیریت Inbound های پنل سنایی", reply_markup=inbound_management_keyboard())
+
+
+@router.callback_query(AdminFilter(), F.data == AdminCallback.inbound_back)
+async def inbound_back(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    await callback.answer()
+    if callback.message:
+        sales_open = await SettingService.is_sales_open()
+        await callback.message.edit_text(
+            _admin_panel_text(sales_open),
+            reply_markup=admin_panel_keyboard(sales_open),
+        )
+
+
+@router.callback_query(AdminFilter(), F.data == AdminCallback.inbound_list)
+async def inbound_list(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    sanaei = SanaeiService(api_key=settings.sanaei_api_key, base_url=settings.sanaei_base_url)
+    try:
+        inbounds = await sanaei.list_inbounds()
+    except Exception as e:
+        await callback.answer(f"خطا در دریافت لیست: {e}", show_alert=True)
+        return
+    await callback.answer()
+    if not callback.message:
+        return
+    if not inbounds:
+        await callback.message.edit_text("هیچ Inboundی ثبت نشده است.", reply_markup=inbound_management_keyboard())
+        return
+    await callback.message.edit_text(
+        f"تعداد Inbound ها: {len(inbounds)}\n\nیک مورد را انتخاب کنید:",
+        reply_markup=inbound_list_keyboard(inbounds),
+    )
+
+
+@router.callback_query(AdminFilter(), F.data.startswith("admin:inbounds:info:"))
+async def inbound_info(callback: CallbackQuery, state: FSMContext) -> None:
+    inbound_id = _parse_callback_int(callback.data)
+    if inbound_id is None:
+        await callback.answer()
+        return
+    sanaei = SanaeiService(api_key=settings.sanaei_api_key, base_url=settings.sanaei_base_url)
+    try:
+        inbound = await sanaei.get_inbound(inbound_id)
+    except Exception as e:
+        await callback.answer(f"خطا: {e}", show_alert=True)
+        return
+    if inbound is None:
+        await callback.answer("Inbound پیدا نشد", show_alert=True)
+        return
+    await callback.answer()
+    if not callback.message:
+        return
+    clients = inbound.get("settings", {}).get("clients", [])
+    text = (
+        f"Inbound: {inbound.get('id')}\n\n"
+        f"Remark: {inbound.get('remark', 'نامشخص')}\n"
+        f"Protocol: {inbound.get('protocol')}\n"
+        f"Port: {inbound.get('port')}\n"
+        f"Tag: {inbound.get('tag')}\n"
+        f"Enabled: {'بله' if inbound.get('enable') else 'خیر'}\n"
+        f"Clients: {len(clients)}"
+    )
+    await callback.message.edit_text(text, reply_markup=inbound_management_keyboard())
+
+
+@router.callback_query(AdminFilter(), F.data == AdminCallback.inbound_add)
+async def add_inbound_start(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(InboundStates.waiting_for_protocol)
+    await callback.answer()
+    if callback.message:
+        await callback.message.answer(
+            "پروتکل Inbound را انتخاب کنید:\n\n"
+            "vless\n"
+            "vmess\n"
+            "trojan\n\n"
+            "نام پروتکل را تایپ کنید:"
+        )
+
+
+@router.message(AdminFilter(), InboundStates.waiting_for_protocol)
+async def add_inbound_protocol(message: Message, state: FSMContext) -> None:
+    if not message.text:
+        await message.answer("پروتکل را به‌صورت متن ارسال کنید.")
+        return
+    protocol = message.text.strip().lower()
+    if protocol not in ("vless", "vmess", "trojan"):
+        await message.answer("پروتکل نامعتبر است. فقط vless, vmess, trojan مجاز است.")
+        return
+    await state.update_data(inbound_protocol=protocol)
+    await state.set_state(InboundStates.waiting_for_port)
+    await message.answer("پورت Inbound را ارسال کنید\n(مثلاً: 52704)")
+
+
+@router.message(AdminFilter(), InboundStates.waiting_for_port)
+async def add_inbound_port(message: Message, state: FSMContext) -> None:
+    if not message.text or not message.text.strip().isdigit():
+        await message.answer("پورت را به‌صورت عدد ارسال کنید.")
+        return
+    port = int(message.text.strip())
+    if port < 1 or port > 65535:
+        await message.answer("پورت باید بین 1 تا 65535 باشد.")
+        return
+    await state.update_data(inbound_port=port)
+    await state.set_state(InboundStates.waiting_for_remark)
+    await message.answer("نام (Remark) Inbound را ارسال کنید\n(مثلاً: VLESS TCP)")
+
+
+@router.message(AdminFilter(), InboundStates.waiting_for_remark)
+async def add_inbound_remark(message: Message, state: FSMContext) -> None:
+    if not message.text:
+        await message.answer("نام را به‌صورت متن ارسال کنید.")
+        return
+    await state.update_data(inbound_remark=message.text.strip())
+    await state.set_state(InboundStates.waiting_for_network)
+    await message.answer("شبکه را انتخاب کنید:\n\ntcp\nws\ngrpc\nh2\n\nنام شبکه را تایپ کنید:")
+
+
+@router.message(AdminFilter(), InboundStates.waiting_for_network)
+async def add_inbound_network(message: Message, state: FSMContext) -> None:
+    if not message.text:
+        await message.answer("شبکه را به‌صورت متن ارسال کنید.")
+        return
+    network = message.text.strip().lower()
+    if network not in ("tcp", "ws", "grpc", "h2"):
+        await message.answer("شبکه نامعتبر است. فقط tcp, ws, grpc, h2 مجاز است.")
+        return
+    await state.update_data(inbound_network=network)
+    await state.set_state(InboundStates.waiting_for_security)
+    await message.answer("امنیت را انتخاب کنید:\n\nnone\ntls\nreality\n\nنام امنیت را تایپ کنید:")
+
+
+@router.message(AdminFilter(), InboundStates.waiting_for_security)
+async def add_inbound_security(message: Message, state: FSMContext) -> None:
+    if not message.text:
+        await message.answer("امنیت را به‌صورت متن ارسال کنید.")
+        return
+    security = message.text.strip().lower()
+    if security not in ("none", "tls", "reality"):
+        await message.answer("امنیت نامعتبر است. فقط none, tls, reality مجاز است.")
+        return
+    await state.update_data(inbound_security=security)
+    await state.set_state(InboundStates.waiting_for_total_gb)
+    await message.answer("محدودیت ترافیک کل به گیگابایت را ارسال کنید\n(0 برای نامحدود)")
+
+
+@router.message(AdminFilter(), InboundStates.waiting_for_total_gb)
+async def add_inbound_total_gb(message: Message, state: FSMContext) -> None:
+    if not message.text or not message.text.strip().isdigit():
+        await message.answer("محدودیت ترافیک را به‌صورت عدد ارسال کنید (0 برای نامحدود).")
+        return
+    await state.update_data(inbound_total_gb=int(message.text.strip()))
+    await state.set_state(InboundStates.waiting_for_expire_days)
+    await message.answer("مدت اعتبار به روز را ارسال کنید\n(0 برای بدون محدودیت)")
+
+
+@router.message(AdminFilter(), InboundStates.waiting_for_expire_days)
+async def add_inbound_finish(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    protocol = data.get("inbound_protocol")
+    port = data.get("inbound_port")
+    remark = data.get("inbound_remark")
+    network = data.get("inbound_network")
+    security = data.get("inbound_security")
+    total_gb = data.get("inbound_total_gb", 0)
+    if not isinstance(port, int) or not isinstance(protocol, str):
+        await state.clear()
+        await message.answer("اطلاعات ناقص است.")
+        return
+    if not message.text or not message.text.strip().isdigit():
+        expire_days = 0
+    else:
+        expire_days = int(message.text.strip())
+    sanaei = SanaeiService(api_key=settings.sanaei_api_key, base_url=settings.sanaei_base_url)
+    try:
+        result = await sanaei.create_inbound(
+            protocol=protocol,
+            port=port,
+            remark=remark or f"{protocol.upper()} - {port}",
+            network=network or "tcp",
+            security=security or "none",
+            total_gb=total_gb,
+            expire_days=expire_days,
+        )
+    except Exception as e:
+        await state.clear()
+        await message.answer(f"خطا در ساخت Inbound: {e}")
+        return
+    await state.clear()
+    await message.answer(
+        f"✅ Inbound ساخته شد\n\n"
+        f"ID: {result.get('id')}\n"
+        f"Remark: {result.get('remark')}\n"
+        f"Protocol: {result.get('protocol')}\n"
+        f"Port: {result.get('port')}\n\n"
+        f"حالا می‌توانید در ساخت پلن، این Inbound ID را وارد کنید."
+    )
+    await message.answer("مدیریت Inbound های پنل سنایی", reply_markup=inbound_management_keyboard())
+
+
+@router.callback_query(AdminFilter(), F.data == AdminCallback.inbound_delete_menu)
+async def delete_inbound_menu(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    sanaei = SanaeiService(api_key=settings.sanaei_api_key, base_url=settings.sanaei_base_url)
+    try:
+        inbounds = await sanaei.list_inbounds()
+    except Exception as e:
+        await callback.answer(f"خطا: {e}", show_alert=True)
+        return
+    await callback.answer()
+    if not callback.message:
+        return
+    if not inbounds:
+        await callback.message.edit_text("هیچ Inboundی ثبت نشده است.", reply_markup=inbound_management_keyboard())
+        return
+    await callback.message.edit_text("برای حذف، Inbound موردنظر را انتخاب کنید:", reply_markup=delete_inbounds_keyboard(inbounds))
+
+
+@router.callback_query(AdminFilter(), F.data.startswith("admin:inbounds:delete:"))
+async def delete_inbound(callback: CallbackQuery, state: FSMContext) -> None:
+    inbound_id = _parse_callback_int(callback.data)
+    if inbound_id is None:
+        await callback.answer()
+        return
+    sanaei = SanaeiService(api_key=settings.sanaei_api_key, base_url=settings.sanaei_base_url)
+    try:
+        deleted = await sanaei.delete_inbound(inbound_id)
+    except Exception as e:
+        await callback.answer(f"خطا در حذف: {e}", show_alert=True)
+        return
+    await callback.answer("حذف شد" if deleted else "پیدا نشد")
+    if callback.message:
+        await callback.message.edit_text("مدیریت Inbound های پنل سنایی", reply_markup=inbound_management_keyboard())

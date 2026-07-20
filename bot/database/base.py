@@ -27,6 +27,12 @@ async def init_db() -> None:
         plan_column_names = {row[1] for row in columns}
         if "price" not in plan_column_names:
             await connection.execute(text("ALTER TABLE plans ADD COLUMN price INTEGER NOT NULL DEFAULT 0"))
+        if "inbound_id" not in plan_column_names:
+            await connection.execute(text("ALTER TABLE plans ADD COLUMN inbound_id INTEGER"))
+        if "traffic_limit_gb" not in plan_column_names:
+            await connection.execute(text("ALTER TABLE plans ADD COLUMN traffic_limit_gb INTEGER NOT NULL DEFAULT 0"))
+        if "duration_days" not in plan_column_names:
+            await connection.execute(text("ALTER TABLE plans ADD COLUMN duration_days INTEGER NOT NULL DEFAULT 30"))
 
         order_columns = await connection.execute(text("PRAGMA table_info(orders)"))
         order_column_names = {row[1] for row in order_columns}
@@ -34,6 +40,11 @@ async def init_db() -> None:
             await connection.execute(text("ALTER TABLE orders ADD COLUMN config_text TEXT"))
         if "approved_at" not in order_column_names:
             await connection.execute(text("ALTER TABLE orders ADD COLUMN approved_at DATETIME"))
+        if "payment_type" not in order_column_names:
+            await connection.execute(text("ALTER TABLE orders ADD COLUMN payment_type TEXT NOT NULL DEFAULT 'wallet'"))
+        if "idempotency_key" not in order_column_names:
+            await connection.execute(text("ALTER TABLE orders ADD COLUMN idempotency_key TEXT"))
+            await connection.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_orders_idempotency_key ON orders(idempotency_key)"))
 
         discount_code_columns = await connection.execute(text("PRAGMA table_info(discount_codes)"))
         discount_code_column_names = {row[1] for row in discount_code_columns}

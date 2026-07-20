@@ -39,3 +39,12 @@ class UserService:
         async with async_session_factory() as session:
             result = await session.execute(select(User.id))
             return len(result.all())
+
+    @staticmethod
+    async def find_user_by_username(username: str) -> User | None:
+        clean = username.lstrip("@").strip().lower()
+        async with async_session_factory() as session:
+            result = await session.execute(
+                select(User).where(User.username.ilike(clean))
+            )
+            return result.scalar_one_or_none()

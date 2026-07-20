@@ -39,7 +39,14 @@ class PlanService:
             return result.scalar_one_or_none()
 
     @staticmethod
-    async def create_plan(service_id: int, name: str, price: int) -> Plan:
+    async def create_plan(
+        service_id: int,
+        name: str,
+        price: int,
+        inbound_id: int | None = None,
+        traffic_limit_gb: int = 0,
+        duration_days: int = 30,
+    ) -> Plan:
         normalized_name = PlanService.normalize_name(name)
         normalized_price = PlanService.normalize_price(price)
 
@@ -48,7 +55,14 @@ class PlanService:
             if service is None:
                 raise ValueError("سرویس انتخاب‌شده پیدا نشد.")
 
-            plan = Plan(service_id=service_id, name=normalized_name, price=normalized_price)
+            plan = Plan(
+                service_id=service_id,
+                name=normalized_name,
+                price=normalized_price,
+                inbound_id=inbound_id,
+                traffic_limit_gb=traffic_limit_gb,
+                duration_days=duration_days,
+            )
             session.add(plan)
             await session.commit()
             await session.refresh(plan)

@@ -38,6 +38,13 @@ class Settings:
     bot_token: str
     admin_id: int
     database_url: str
+    # Wallet
+    wallet_enabled: bool
+    # Sanaei Panel
+    sanaei_base_url: str
+    sanaei_api_key: str
+    sanaei_secret: str
+    sanaei_webhook_url: str
 
 
 DATABASE_DIR: Final[Path] = BASE_DIR / "database"
@@ -50,4 +57,9 @@ settings = Settings(
         "DATABASE_URL",
         f"sqlite+aiosqlite:///{(DATABASE_DIR / 'database.db').as_posix()}",
     ),
+    wallet_enabled=os.getenv("WALLET_ENABLED", "true").lower() == "true",
+    sanaei_base_url=os.getenv("SANAIE_BASE_URL", ""),
+    sanaei_api_key=os.getenv("SANAIE_API_KEY", ""),
+    sanaei_secret=os.getenv("SANAIE_SECRET", ""),
+    sanaei_webhook_url=os.getenv("SANAIE_WEBHOOK_URL", ""),
 )
