@@ -17,6 +17,7 @@ class PlanStates(StatesGroup):
     waiting_for_inbound_port = State()
     waiting_for_traffic_limit = State()
     waiting_for_duration_days = State()
+    waiting_for_limit_ip = State()
 
 
 class BankCardStates(StatesGroup):

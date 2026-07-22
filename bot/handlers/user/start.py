@@ -507,6 +507,7 @@ async def pay_with_wallet(callback: CallbackQuery, state: FSMContext, bot: Bot) 
             inbound_id=plan.inbound_id,
             traffic_gb=plan.traffic_limit_gb,
             duration_days=plan.duration_days,
+            limit_ip=plan.limit_ip,
         )
         await asyncio.sleep(5)
         links = await sanaei.get_config(result["email"])

@@ -160,6 +160,7 @@ class SanaeiService:
         inbound_id: int,
         traffic_gb: int = 0,
         duration_days: int = 30,
+        limit_ip: int = 0,
     ) -> dict:
         email = f"bot_{uuid4().hex[:12]}"
         traffic_bytes = traffic_gb * 1073741824 if traffic_gb > 0 else 0
@@ -171,14 +172,14 @@ class SanaeiService:
                 "totalGB": traffic_bytes,
                 "expiryTime": expiry_ms,
                 "tgId": 0,
-                "limitIp": 0,
+                "limitIp": limit_ip,
                 "enable": True,
             },
             "inboundIds": [inbound_id],
         }
 
-        logger.info("Creating client: email=%s inbound_id=%d traffic_bytes=%d expiry_ms=%d",
-                     email, inbound_id, traffic_bytes, expiry_ms)
+        logger.info("Creating client: email=%s inbound_id=%d traffic_bytes=%d expiry_ms=%d limit_ip=%d",
+                     email, inbound_id, traffic_bytes, expiry_ms, limit_ip)
 
         data = await asyncio.to_thread(
             self._request, "POST", "/panel/api/clients/add", json=payload
@@ -195,6 +196,7 @@ class SanaeiService:
             inbound_id=product_data["inbound_id"],
             traffic_gb=product_data.get("traffic_gb", 0),
             duration_days=product_data.get("duration_days", 30),
+            limit_ip=product_data.get("limit_ip", 0),
         )
 
     async def get_config(self, email: str, retries: int = 3) -> list[str]:

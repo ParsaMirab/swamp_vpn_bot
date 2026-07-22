@@ -46,6 +46,7 @@ class PlanService:
         inbound_id: int | None = None,
         traffic_limit_gb: int = 0,
         duration_days: int = 30,
+        limit_ip: int = 0,
     ) -> Plan:
         normalized_name = PlanService.normalize_name(name)
         normalized_price = PlanService.normalize_price(price)
@@ -62,6 +63,7 @@ class PlanService:
                 inbound_id=inbound_id,
                 traffic_limit_gb=traffic_limit_gb,
                 duration_days=duration_days,
+                limit_ip=limit_ip,
             )
             session.add(plan)
             await session.commit()

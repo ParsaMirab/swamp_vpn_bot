@@ -33,6 +33,8 @@ async def init_db() -> None:
             await connection.execute(text("ALTER TABLE plans ADD COLUMN traffic_limit_gb INTEGER NOT NULL DEFAULT 0"))
         if "duration_days" not in plan_column_names:
             await connection.execute(text("ALTER TABLE plans ADD COLUMN duration_days INTEGER NOT NULL DEFAULT 30"))
+        if "limit_ip" not in plan_column_names:
+            await connection.execute(text("ALTER TABLE plans ADD COLUMN limit_ip INTEGER NOT NULL DEFAULT 0"))
 
         order_columns = await connection.execute(text("PRAGMA table_info(orders)"))
         order_column_names = {row[1] for row in order_columns}

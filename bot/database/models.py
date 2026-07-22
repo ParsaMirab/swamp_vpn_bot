@@ -67,6 +67,7 @@ class Plan(Base):
     inbound_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     traffic_limit_gb: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     duration_days: Mapped[int] = mapped_column(Integer, nullable=False, default=30, server_default="30")
+    limit_ip: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

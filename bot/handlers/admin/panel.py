@@ -455,6 +455,21 @@ async def add_plan_traffic_limit(message: Message, state: FSMContext) -> None:
 
 
 @router.message(AdminFilter(), PlanStates.waiting_for_duration_days)
+async def add_plan_duration_days(message: Message, state: FSMContext) -> None:
+    duration_days = 30
+    if message.text and message.text.strip().isdigit():
+        duration_days = int(message.text.strip())
+    if duration_days <= 0:
+        duration_days = 30
+    await state.update_data(plan_duration_days=duration_days)
+    await state.set_state(PlanStates.waiting_for_limit_ip)
+    await message.answer(
+        "تعداد کاربران همزمان (اتصال همزمان) را ارسال کنید\n"
+        "(0 برای نامحدود — هر تعداد اتصال)"
+    )
+
+
+@router.message(AdminFilter(), PlanStates.waiting_for_limit_ip)
 async def add_plan_finish(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     service_id = data.get("service_id")
@@ -464,17 +479,20 @@ async def add_plan_finish(message: Message, state: FSMContext) -> None:
     plan_protocol = data.get("plan_protocol")
     plan_inbound_port = data.get("plan_inbound_port")
     plan_traffic_limit = data.get("plan_traffic_limit", 0)
+    plan_duration_days = data.get("plan_duration_days", 30)
     if not isinstance(service_id, int) or not isinstance(plan_name, str) or not isinstance(plan_price, int):
         await state.clear()
         await message.answer("اطلاعات پلن ناقص است.")
         return
     if not isinstance(plan_traffic_limit, int):
         plan_traffic_limit = 0
-    duration_days = 30
+    if not isinstance(plan_duration_days, int) or plan_duration_days <= 0:
+        plan_duration_days = 30
+    limit_ip = 0
     if message.text and message.text.strip().isdigit():
-        duration_days = int(message.text.strip())
-    if duration_days <= 0:
-        duration_days = 30
+        limit_ip = int(message.text.strip())
+    if limit_ip < 0:
+        limit_ip = 0
     if plan_protocol and isinstance(plan_inbound_port, int):
         sanaei = SanaeiService(api_key=settings.sanaei_api_key, base_url=settings.sanaei_base_url)
         try:
@@ -485,7 +503,7 @@ async def add_plan_finish(message: Message, state: FSMContext) -> None:
                 network="tcp",
                 security="none",
                 total_gb=plan_traffic_limit if plan_traffic_limit > 0 else 0,
-                expire_days=duration_days,
+                expire_days=plan_duration_days,
             )
             plan_inbound_id = inbound_result.get("id")
         except Exception as e:
@@ -503,7 +521,8 @@ async def add_plan_finish(message: Message, state: FSMContext) -> None:
             price=plan_price,
             inbound_id=plan_inbound_id,
             traffic_limit_gb=plan_traffic_limit,
-            duration_days=duration_days,
+            duration_days=plan_duration_days,
+            limit_ip=limit_ip,
         )
     except ValueError as exc:
         await message.answer(str(exc))
@@ -512,13 +531,15 @@ async def add_plan_finish(message: Message, state: FSMContext) -> None:
     inbound_info = f"Inbound ID: {plan.inbound_id}" if plan.inbound_id else ""
     if plan_protocol:
         inbound_info = f"Protocol: {plan_protocol.upper()} | Port: {plan_inbound_port}"
+    limit_ip_text = "نامحدود" if plan.limit_ip == 0 else str(plan.limit_ip)
     await message.answer(
         f"✅ پلن ذخیره شد\n\n"
         f"نام: {escape(plan.name)}\n"
         f"قیمت: {plan.price:,} تومان\n"
         f"{inbound_info}\n"
         f"حجم: {'نامحدود' if plan.traffic_limit_gb == 0 else f'{plan.traffic_limit_gb} گیگ'}\n"
-        f"مدت: {plan.duration_days} روز"
+        f"مدت: {plan.duration_days} روز\n"
+        f"کاربران همزمان: {limit_ip_text}"
     )
     service = await ServiceService.get_service(service_id)
     if service is not None:
@@ -1005,6 +1026,7 @@ async def approve_card_to_card_order(callback: CallbackQuery, state: FSMContext,
             inbound_id=plan.inbound_id,
             traffic_gb=plan.traffic_limit_gb,
             duration_days=plan.duration_days,
+            limit_ip=plan.limit_ip,
         )
         await asyncio.sleep(5)
         links = await sanaei.get_config(result["email"])
