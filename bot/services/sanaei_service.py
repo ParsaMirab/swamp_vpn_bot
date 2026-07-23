@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import time
@@ -15,6 +16,9 @@ logger = logging.getLogger(__name__)
 LINKS_TIMEOUT = 60
 DEFAULT_TIMEOUT = 30
 
+REPLACEMENT_DOMAIN = "swamp.nicebrovip.xyz"
+REPLACEMENT_IP = "144.31.157.131"
+
 
 class SanaeiService:
     def __init__(self, api_key: str, base_url: str):
@@ -23,6 +27,75 @@ class SanaeiService:
 
     def _headers(self) -> dict:
         return {"Authorization": f"Bearer {self.api_key}"}
+
+    @staticmethod
+    def _replace_domain_in_link(link: str) -> str:
+        if link.startswith("vmess://"):
+            try:
+                raw = link[len("vmess://"):]
+                padded = raw + "=" * (-len(raw) % 4)
+                decoded = base64.b64decode(padded).decode("utf-8")
+                config = json.loads(decoded)
+                addr = config.get("add", "")
+                if addr == REPLACEMENT_DOMAIN:
+                    config["add"] = REPLACEMENT_IP
+                elif addr == f"https://{REPLACEMENT_DOMAIN}" or addr == f"http://{REPLACEMENT_DOMAIN}":
+                    config["add"] = REPLACEMENT_IP
+                json_str = json.dumps(config, separators=(",", ":"))
+                encoded = base64.b64encode(json_str.encode("utf-8")).decode("utf-8").rstrip("=")
+                return f"vmess://{encoded}"
+            except Exception:
+                return link
+
+        if REPLACEMENT_DOMAIN not in link:
+            return link
+
+        if link.startswith("vless://") or link.startswith("trojan://"):
+            protocol = "vless" if link.startswith("vless://") else "trojan"
+            rest = link[len(f"{protocol}://"):]
+            if "@" in rest:
+                uuid_part, after_at = rest.split("@", 1)
+                if ":" in after_at:
+                    host_port, query_fragment = after_at.split(":", 1)
+                    domain_part = host_port.split("?")[0] if "?" in host_port else host_port.split("#")[0] if "#" in host_port else host_port
+                    if domain_part == REPLACEMENT_DOMAIN:
+                        new_host_port = host_port.replace(REPLACEMENT_DOMAIN, REPLACEMENT_IP, 1)
+                        new_after_at = new_host_port + after_at[len(host_port):]
+                        return f"{protocol}://{uuid_part}@{new_after_at}"
+            return link
+
+        if link.startswith("ss://"):
+            rest = link[len("ss://"):]
+            if "@" in rest:
+                encoded_part, after_at = rest.split("@", 1)
+                if ":" in after_at:
+                    host_port, query_fragment = after_at.split(":", 1)
+                    domain_part = host_port.split("?")[0] if "?" in host_port else host_port.split("#")[0] if "#" in host_port else host_port
+                    if domain_part == REPLACEMENT_DOMAIN:
+                        new_host_port = host_port.replace(REPLACEMENT_DOMAIN, REPLACEMENT_IP, 1)
+                        new_after_at = new_host_port + after_at[len(host_port):]
+                        return f"ss://{encoded_part}@{new_after_at}"
+            return link
+
+        if link.startswith("hysteria2://") or link.startswith("hy2://"):
+            protocol = "hysteria2" if link.startswith("hysteria2://") else "hy2"
+            rest = link[len(f"{protocol}://"):]
+            if "@" in rest:
+                auth_part, after_at = rest.split("@", 1)
+                if ":" in after_at:
+                    host_port, query_fragment = after_at.split(":", 1)
+                    domain_part = host_port.split("?")[0] if "?" in host_port else host_port.split("#")[0] if "#" in host_port else host_port
+                    if domain_part == REPLACEMENT_DOMAIN:
+                        new_host_port = host_port.replace(REPLACEMENT_DOMAIN, REPLACEMENT_IP, 1)
+                        new_after_at = new_host_port + after_at[len(host_port):]
+                        return f"{protocol}://{auth_part}@{new_after_at}"
+            return link
+
+        return link
+
+    @staticmethod
+    def _replace_domain_in_links(links: list[str]) -> list[str]:
+        return [SanaeiService._replace_domain_in_link(link) for link in links]
 
     def _request(self, method: str, path: str, timeout: int = DEFAULT_TIMEOUT, **kwargs) -> dict:
         url = f"{self.base_url}{path}"
@@ -189,7 +262,9 @@ class SanaeiService:
             logger.error("Panel create_user failed: %s", data.get("msg", data))
             raise ValueError(data.get("msg", "خطا در ساخت اکانت کاربر"))
 
-        return {"email": email, "inbound_id": inbound_id, "raw": data}
+        obj = data.get("obj", {})
+        client_uuid = obj.get("uuid", "") if isinstance(obj, dict) else ""
+        return {"email": email, "inbound_id": inbound_id, "uuid": client_uuid, "raw": data}
 
     async def buy_service(self, user_data: dict, product_data: dict) -> dict:
         return await self.create_user(
@@ -211,7 +286,7 @@ class SanaeiService:
                     raise ValueError(data.get("msg", "خطا در دریافت کانفیگ"))
                 links = data.get("obj", [])
                 if links:
-                    return links
+                    return self._replace_domain_in_links(links)
                 logger.warning("get_config empty links for email=%s (attempt %d)", email, attempt + 1)
             except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
                 last_error = e
@@ -228,5 +303,5 @@ class SanaeiService:
             self._request, "GET", "/panel/api/server/status"
         )
 
-    def get_sub_url(self, email: str) -> str:
-        return f"{self.base_url}/sub/{email}"
+    def get_sub_url(self, client_uuid: str) -> str:
+        return f"{self.base_url}/sub/{client_uuid}"

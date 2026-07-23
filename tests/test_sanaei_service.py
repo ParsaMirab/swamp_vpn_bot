@@ -54,7 +54,7 @@ class TestHeaders:
 class TestCreateUser:
     @pytest.mark.asyncio
     async def test_success(self, sanaei_service):
-        resp = _mock_response({"success": True, "msg": "Client added", "obj": None})
+        resp = _mock_response({"success": True, "msg": "Client added", "obj": {"uuid": "test-uuid-123"}})
         with patch("bot.services.sanaei_service.requests.request", return_value=resp) as mock_req:
             result = await sanaei_service.create_user(
                 inbound_id=3, traffic_gb=50, duration_days=30
@@ -62,6 +62,7 @@ class TestCreateUser:
 
         assert result["email"].startswith("bot_")
         assert result["inbound_id"] == 3
+        assert result["uuid"] == "test-uuid-123"
         assert len(result["email"]) == 16  # "bot_" + 12 hex chars
 
         mock_req.assert_called_once()
@@ -85,7 +86,7 @@ class TestCreateUser:
 
     @pytest.mark.asyncio
     async def test_expiry_time_in_milliseconds(self, sanaei_service):
-        resp = _mock_response({"success": True, "obj": None})
+        resp = _mock_response({"success": True, "obj": {"uuid": "test-uuid"}})
         with patch("bot.services.sanaei_service.requests.request", return_value=resp) as mock_req:
             await sanaei_service.create_user(
                 inbound_id=1, traffic_gb=0, duration_days=7
@@ -100,7 +101,7 @@ class TestCreateUser:
 
     @pytest.mark.asyncio
     async def test_zero_traffic(self, sanaei_service):
-        resp = _mock_response({"success": True, "obj": None})
+        resp = _mock_response({"success": True, "obj": {"uuid": "test-uuid"}})
         with patch("bot.services.sanaei_service.requests.request", return_value=resp) as mock_req:
             await sanaei_service.create_user(inbound_id=1)
 
@@ -109,7 +110,7 @@ class TestCreateUser:
 
     @pytest.mark.asyncio
     async def test_zero_duration_no_expiry(self, sanaei_service):
-        resp = _mock_response({"success": True, "obj": None})
+        resp = _mock_response({"success": True, "obj": {"uuid": "test-uuid"}})
         with patch("bot.services.sanaei_service.requests.request", return_value=resp) as mock_req:
             await sanaei_service.create_user(
                 inbound_id=1, duration_days=0
@@ -136,7 +137,7 @@ class TestCreateUser:
 
     @pytest.mark.asyncio
     async def test_email_format_unique(self, sanaei_service):
-        resp = _mock_response({"success": True, "obj": None})
+        resp = _mock_response({"success": True, "obj": {"uuid": "test-uuid"}})
         emails = set()
         with patch("bot.services.sanaei_service.requests.request", return_value=resp) as mock_req:
             for _ in range(10):
@@ -307,6 +308,119 @@ class TestGetConfig:
                 await sanaei_service.get_config("user@email.com", retries=2)
 
 
+# ─── Domain Replacement ─────────────────────────────────────────────
+
+class TestDomainReplacement:
+    def test_vless_link_replaces_domain(self):
+        link = "vless://abc123@swamp.nicebrovip.xyz:443?type=tcp&security=none#MyServer"
+        result = SanaeiService._replace_domain_in_link(link)
+        assert "144.31.157.131" in result
+        assert "swamp.nicebrovip.xyz" not in result
+        assert result.startswith("vless://")
+        assert ":443?" in result
+
+    def test_trojan_link_replaces_domain(self):
+        link = "trojan://password123@swamp.nicebrovip.xyz:8443?security=tls#TrojanServer"
+        result = SanaeiService._replace_domain_in_link(link)
+        assert "144.31.157.131" in result
+        assert "swamp.nicebrovip.xyz" not in result
+        assert result.startswith("trojan://")
+        assert ":8443?" in result
+
+    def test_vmess_link_replaces_domain(self):
+        import base64
+        import json
+        config = {
+            "v": "2",
+            "ps": "MyVmess",
+            "add": "swamp.nicebrovip.xyz",
+            "port": "443",
+            "id": "abc123-def456",
+            "aid": "0",
+            "net": "tcp",
+            "type": "none",
+            "host": "",
+            "path": "",
+            "tls": "tls",
+        }
+        encoded = base64.b64encode(json.dumps(config, separators=(",", ":")).encode()).decode().rstrip("=")
+        link = f"vmess://{encoded}"
+        result = SanaeiService._replace_domain_in_link(link)
+        assert result.startswith("vmess://")
+        padded = result[8:] + "=" * (-len(result[8:]) % 4)
+        decoded_result = base64.b64decode(padded).decode()
+        result_config = json.loads(decoded_result)
+        assert result_config["add"] == "144.31.157.131"
+        assert result_config["port"] == "443"
+
+    def test_vmess_link_preserves_port(self):
+        import base64
+        import json
+        config = {
+            "v": "2",
+            "ps": "Test",
+            "add": "swamp.nicebrovip.xyz",
+            "port": "8443",
+            "id": "test-id",
+            "aid": "0",
+            "net": "ws",
+            "type": "none",
+            "host": "",
+            "path": "/ws",
+            "tls": "tls",
+        }
+        encoded = base64.b64encode(json.dumps(config, separators=(",", ":")).encode()).decode().rstrip("=")
+        link = f"vmess://{encoded}"
+        result = SanaeiService._replace_domain_in_link(link)
+        padded = result[8:] + "=" * (-len(result[8:]) % 4)
+        decoded_result = base64.b64decode(padded).decode()
+        result_config = json.loads(decoded_result)
+        assert result_config["port"] == "8443"
+
+    def test_ss_link_replaces_domain(self):
+        import base64
+        auth = base64.b64encode(b"password:123").decode()
+        link = f"ss://{auth}@swamp.nicebrovip.xyz:443#Shadowsocks"
+        result = SanaeiService._replace_domain_in_link(link)
+        assert "144.31.157.131" in result
+        assert "swamp.nicebrovip.xyz" not in result
+
+    def test_hysteria2_link_replaces_domain(self):
+        link = "hysteria2://authkey@swamp.nicebrovip.xyz:443?insecure=1#Hysteria2"
+        result = SanaeiService._replace_domain_in_link(link)
+        assert "144.31.157.131" in result
+        assert "swamp.nicebrovip.xyz" not in result
+        assert result.startswith("hysteria2://")
+
+    def test_no_domain_no_change(self):
+        link = "vless://abc@other-domain.com:443#Test"
+        result = SanaeiService._replace_domain_in_link(link)
+        assert result == link
+
+    def test_replace_multiple_links(self):
+        links = [
+            "vless://abc@swamp.nicebrovip.xyz:443#Server1",
+            "trojan://pass@swamp.nicebrovip.xyz:8443#Server2",
+            "vless://xyz@other.com:443#Server3",
+        ]
+        result = SanaeiService._replace_domain_in_links(links)
+        assert len(result) == 3
+        assert "144.31.157.131" in result[0]
+        assert "144.31.157.131" in result[1]
+        assert "swamp.nicebrovip.xyz" not in result[0]
+        assert "swamp.nicebrovip.xyz" not in result[1]
+        assert result[2] == links[2]
+
+    @pytest.mark.asyncio
+    async def test_get_config_applies_domain_replacement(self, sanaei_service):
+        links = ["vless://abc@swamp.nicebrovip.xyz:443#Test"]
+        resp = _mock_response({"success": True, "obj": links})
+        with patch("bot.services.sanaei_service.requests.request", return_value=resp):
+            result = await sanaei_service.get_config("user@email.com")
+        assert "144.31.157.131" in result[0]
+        assert "swamp.nicebrovip.xyz" not in result[0]
+
+
 # ─── list_inbounds ───────────────────────────────────────────────────
 
 class TestListInbounds:
@@ -375,7 +489,7 @@ class TestDeleteInbound:
 class TestBuyService:
     @pytest.mark.asyncio
     async def test_success(self, sanaei_service):
-        resp = _mock_response({"success": True, "obj": None})
+        resp = _mock_response({"success": True, "obj": {"uuid": "test-uuid"}})
         with patch("bot.services.sanaei_service.requests.request", return_value=resp):
             result = await sanaei_service.buy_service(
                 user_data={"user_id": 123},
@@ -388,10 +502,11 @@ class TestBuyService:
 
         assert "email" in result
         assert result["inbound_id"] == 2
+        assert result["uuid"] == "test-uuid"
 
     @pytest.mark.asyncio
     async def test_defaults(self, sanaei_service):
-        resp = _mock_response({"success": True, "obj": None})
+        resp = _mock_response({"success": True, "obj": {"uuid": "test-uuid"}})
         with patch("bot.services.sanaei_service.requests.request", return_value=resp) as mock_req:
             await sanaei_service.buy_service(
                 user_data={"user_id": 1},
@@ -420,10 +535,10 @@ class TestCheckStatus:
 
 class TestGetSubUrl:
     def test_builds_subscription_url(self, sanaei_service):
-        url = sanaei_service.get_sub_url("bot_abc123def456")
-        assert url == "https://test-panel.com/sub/bot_abc123def456"
+        url = sanaei_service.get_sub_url("550e8400-e29b-41d4-a716-446655440000")
+        assert url == "https://test-panel.com/sub/550e8400-e29b-41d4-a716-446655440000"
 
     def test_strips_trailing_slash(self):
         svc = SanaeiService(api_key="k", base_url="https://panel.com/")
-        url = svc.get_sub_url("user@test.com")
-        assert url == "https://panel.com/sub/user@test.com"
+        url = svc.get_sub_url("550e8400-e29b-41d4-a716-446655440000")
+        assert url == "https://panel.com/sub/550e8400-e29b-41d4-a716-446655440000"
