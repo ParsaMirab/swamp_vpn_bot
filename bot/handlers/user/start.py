@@ -1,6 +1,9 @@
 import asyncio
+import logging
 from html import escape
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
@@ -512,7 +515,9 @@ async def pay_with_wallet(callback: CallbackQuery, state: FSMContext, bot: Bot) 
         await asyncio.sleep(5)
         links = await sanaei.get_config(result["email"])
         sub_link = "\n".join(links) if links else ""
+        logger.info("create_user result: email=%s, sub_id=%s", result["email"], result["sub_id"])
         sub_url = sanaei.get_sub_url(result["sub_id"])
+        logger.info("sub_url: %s", sub_url)
         config_text = result["email"]
         await OrderService.complete_order(order.id, sub_link=sub_link, config_text=config_text)
         await status_msg.delete()

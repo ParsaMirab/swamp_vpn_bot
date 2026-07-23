@@ -308,8 +308,13 @@ class SanaeiService:
             data = await asyncio.to_thread(
                 self._request, "GET", f"/panel/api/clients/get/{email}"
             )
+            logger.info("get_client_by_email response for %s: %s", email, data)
             if data.get("success"):
-                return data.get("obj")
+                obj = data.get("obj")
+                logger.info("Client obj keys: %s", list(obj.keys()) if isinstance(obj, dict) else "not dict")
+                if isinstance(obj, dict):
+                    logger.info("Client subId: %s, uuid: %s", obj.get("subId"), obj.get("uuid"))
+                return obj
         except Exception as e:
             logger.warning("get_client_by_email failed for %s: %s", email, e)
         return None
