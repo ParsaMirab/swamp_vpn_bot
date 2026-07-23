@@ -263,8 +263,8 @@ class SanaeiService:
             raise ValueError(data.get("msg", "خطا در ساخت اکانت کاربر"))
 
         await asyncio.sleep(2)
-        client_uuid = await self.get_client_uuid(email)
-        return {"email": email, "inbound_id": inbound_id, "uuid": client_uuid, "raw": data}
+        sub_id = await self.get_client_sub_id(email)
+        return {"email": email, "inbound_id": inbound_id, "sub_id": sub_id, "raw": data}
 
     async def buy_service(self, user_data: dict, product_data: dict) -> dict:
         return await self.create_user(
@@ -304,25 +304,21 @@ class SanaeiService:
         )
 
     async def get_client_by_email(self, email: str) -> dict | None:
-        inbounds = await self.list_inbounds()
-        for inbound in inbounds:
-            settings = inbound.get("settings", "{}")
-            if isinstance(settings, str):
-                try:
-                    settings = json.loads(settings)
-                except json.JSONDecodeError:
-                    continue
-            clients = settings.get("clients", [])
-            for client in clients:
-                if client.get("email") == email:
-                    return client
+        try:
+            data = await asyncio.to_thread(
+                self._request, "GET", f"/panel/api/clients/get/{email}"
+            )
+            if data.get("success"):
+                return data.get("obj")
+        except Exception as e:
+            logger.warning("get_client_by_email failed for %s: %s", email, e)
         return None
 
-    async def get_client_uuid(self, email: str) -> str:
+    async def get_client_sub_id(self, email: str) -> str:
         client = await self.get_client_by_email(email)
         if client:
-            return client.get("uuid", "")
+            return client.get("subId", "")
         return ""
 
-    def get_sub_url(self, client_uuid: str) -> str:
-        return f"{self.base_url}/sub/{client_uuid}"
+    def get_sub_url(self, sub_id: str) -> str:
+        return f"{self.base_url}/sub/{sub_id}"
