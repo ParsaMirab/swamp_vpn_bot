@@ -494,7 +494,7 @@ async def add_plan_finish(message: Message, state: FSMContext) -> None:
     if limit_ip < 0:
         limit_ip = 0
     if plan_protocol and isinstance(plan_inbound_port, int):
-        sanaei = SanaeiService(api_key=settings.sanaei_api_key, base_url=settings.sanaei_base_url)
+        sanaei = SanaeiService(api_key=settings.sanaei_api_key, base_url=settings.sanaei_base_url, sub_url=settings.sanaei_sub_url)
         try:
             inbound_result = await sanaei.create_inbound(
                 protocol=plan_protocol,
@@ -1021,6 +1021,7 @@ async def approve_card_to_card_order(callback: CallbackQuery, state: FSMContext,
         sanaei = SanaeiService(
             api_key=settings.sanaei_api_key,
             base_url=settings.sanaei_base_url,
+            sub_url=settings.sanaei_sub_url,
         )
         result = await sanaei.create_user(
             inbound_id=plan.inbound_id,
@@ -1660,7 +1661,7 @@ async def inbound_back(callback: CallbackQuery, state: FSMContext) -> None:
 @router.callback_query(AdminFilter(), F.data == AdminCallback.inbound_list)
 async def inbound_list(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
-    sanaei = SanaeiService(api_key=settings.sanaei_api_key, base_url=settings.sanaei_base_url)
+    sanaei = SanaeiService(api_key=settings.sanaei_api_key, base_url=settings.sanaei_base_url, sub_url=settings.sanaei_sub_url)
     try:
         inbounds = await sanaei.list_inbounds()
     except Exception as e:
@@ -1684,7 +1685,7 @@ async def inbound_info(callback: CallbackQuery, state: FSMContext) -> None:
     if inbound_id is None:
         await callback.answer()
         return
-    sanaei = SanaeiService(api_key=settings.sanaei_api_key, base_url=settings.sanaei_base_url)
+    sanaei = SanaeiService(api_key=settings.sanaei_api_key, base_url=settings.sanaei_base_url, sub_url=settings.sanaei_sub_url)
     try:
         inbound = await sanaei.get_inbound(inbound_id)
     except Exception as e:
@@ -1816,7 +1817,7 @@ async def add_inbound_finish(message: Message, state: FSMContext) -> None:
         expire_days = 0
     else:
         expire_days = int(message.text.strip())
-    sanaei = SanaeiService(api_key=settings.sanaei_api_key, base_url=settings.sanaei_base_url)
+    sanaei = SanaeiService(api_key=settings.sanaei_api_key, base_url=settings.sanaei_base_url, sub_url=settings.sanaei_sub_url)
     try:
         result = await sanaei.create_inbound(
             protocol=protocol,
@@ -1846,7 +1847,7 @@ async def add_inbound_finish(message: Message, state: FSMContext) -> None:
 @router.callback_query(AdminFilter(), F.data == AdminCallback.inbound_delete_menu)
 async def delete_inbound_menu(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
-    sanaei = SanaeiService(api_key=settings.sanaei_api_key, base_url=settings.sanaei_base_url)
+    sanaei = SanaeiService(api_key=settings.sanaei_api_key, base_url=settings.sanaei_base_url, sub_url=settings.sanaei_sub_url)
     try:
         inbounds = await sanaei.list_inbounds()
     except Exception as e:
@@ -1867,7 +1868,7 @@ async def delete_inbound(callback: CallbackQuery, state: FSMContext) -> None:
     if inbound_id is None:
         await callback.answer()
         return
-    sanaei = SanaeiService(api_key=settings.sanaei_api_key, base_url=settings.sanaei_base_url)
+    sanaei = SanaeiService(api_key=settings.sanaei_api_key, base_url=settings.sanaei_base_url, sub_url=settings.sanaei_sub_url)
     try:
         deleted = await sanaei.delete_inbound(inbound_id)
     except Exception as e:

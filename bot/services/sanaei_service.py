@@ -21,9 +21,10 @@ REPLACEMENT_IP = "144.31.157.131"
 
 
 class SanaeiService:
-    def __init__(self, api_key: str, base_url: str):
+    def __init__(self, api_key: str, base_url: str, sub_url: str = ""):
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
+        self.sub_url = sub_url.rstrip("/") if sub_url else self.base_url
 
     def _headers(self) -> dict:
         return {"Authorization": f"Bearer {self.api_key}"}
@@ -339,4 +340,4 @@ class SanaeiService:
         return ""
 
     def get_sub_url(self, sub_id: str) -> str:
-        return f"{self.base_url}/sub/{sub_id}"
+        return f"{self.sub_url}/sub/{sub_id}"

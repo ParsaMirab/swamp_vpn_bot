@@ -45,6 +45,7 @@ class Settings:
     sanaei_api_key: str
     sanaei_secret: str
     sanaei_webhook_url: str
+    sanaei_sub_url: str
 
 
 DATABASE_DIR: Final[Path] = BASE_DIR / "database"
@@ -62,4 +63,5 @@ settings = Settings(
     sanaei_api_key=os.getenv("SANAIE_API_KEY", ""),
     sanaei_secret=os.getenv("SANAIE_SECRET", ""),
     sanaei_webhook_url=os.getenv("SANAIE_WEBHOOK_URL", ""),
+    sanaei_sub_url=os.getenv("SANAIE_SUB_URL", ""),
 )

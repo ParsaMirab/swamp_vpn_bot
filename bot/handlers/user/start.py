@@ -505,6 +505,7 @@ async def pay_with_wallet(callback: CallbackQuery, state: FSMContext, bot: Bot) 
         sanaei = SanaeiService(
             api_key=settings.sanaei_api_key,
             base_url=settings.sanaei_base_url,
+            sub_url=settings.sanaei_sub_url,
         )
         result = await sanaei.create_user(
             inbound_id=plan.inbound_id,

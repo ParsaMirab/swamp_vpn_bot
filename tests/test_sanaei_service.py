@@ -7,7 +7,7 @@ from bot.services.sanaei_service import SanaeiService
 
 @pytest.fixture
 def sanaei_service():
-    return SanaeiService(api_key="test_key", base_url="https://test-panel.com")
+    return SanaeiService(api_key="test_key", base_url="https://test-panel.com", sub_url="https://test-panel.com:2096")
 
 
 def _mock_response(json_data, status_code=200):
@@ -469,11 +469,16 @@ class TestGetClientSubId:
 # ─── get_sub_url ─────────────────────────────────────────────────────
 
 class TestGetSubUrl:
-    def test_builds_subscription_url(self, sanaei_service):
+    def test_builds_subscription_url_with_sub_url(self, sanaei_service):
         url = sanaei_service.get_sub_url("87a70bf1-3804-445e-917d-ebd64f3e4e75")
-        assert url == "https://test-panel.com/sub/87a70bf1-3804-445e-917d-ebd64f3e4e75"
+        assert url == "https://test-panel.com:2096/sub/87a70bf1-3804-445e-917d-ebd64f3e4e75"
 
-    def test_strips_trailing_slash(self):
-        svc = SanaeiService(api_key="k", base_url="https://panel.com/")
+    def test_falls_back_to_base_url_when_no_sub_url(self):
+        svc = SanaeiService(api_key="k", base_url="https://panel.com")
         url = svc.get_sub_url("87a70bf1-3804-445e-917d-ebd64f3e4e75")
         assert url == "https://panel.com/sub/87a70bf1-3804-445e-917d-ebd64f3e4e75"
+
+    def test_strips_trailing_slash(self):
+        svc = SanaeiService(api_key="k", base_url="https://panel.com/", sub_url="https://panel.com:2096/")
+        url = svc.get_sub_url("87a70bf1-3804-445e-917d-ebd64f3e4e75")
+        assert url == "https://panel.com:2096/sub/87a70bf1-3804-445e-917d-ebd64f3e4e75"
