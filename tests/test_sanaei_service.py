@@ -426,6 +426,31 @@ class TestCheckStatus:
         assert status["mem"] == 60
 
 
+# ─── get_client_sub_id ────────────────────────────────────────────────
+
+class TestGetClientSubId:
+    @pytest.mark.asyncio
+    async def test_returns_sub_id(self, sanaei_service):
+        resp = _mock_response({"success": True, "obj": {"subId": "abc-123", "uuid": "uuid-456"}})
+        with patch("bot.services.sanaei_service.requests.request", return_value=resp):
+            result = await sanaei_service.get_client_sub_id("user@email.com")
+        assert result == "abc-123"
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_uuid_when_sub_id_empty(self, sanaei_service):
+        resp = _mock_response({"success": True, "obj": {"subId": "", "uuid": "fallback-uuid"}})
+        with patch("bot.services.sanaei_service.requests.request", return_value=resp):
+            result = await sanaei_service.get_client_sub_id("user@email.com")
+        assert result == "fallback-uuid"
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_when_client_not_found(self, sanaei_service):
+        resp = _mock_response({"success": False, "msg": "not found"})
+        with patch("bot.services.sanaei_service.requests.request", return_value=resp):
+            result = await sanaei_service.get_client_sub_id("unknown@email.com")
+        assert result == ""
+
+
 # ─── get_sub_url ─────────────────────────────────────────────────────
 
 class TestGetSubUrl:

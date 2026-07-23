@@ -322,7 +322,11 @@ class SanaeiService:
     async def get_client_sub_id(self, email: str) -> str:
         client = await self.get_client_by_email(email)
         if client:
-            return client.get("subId", "")
+            sub_id = client.get("subId", "")
+            if sub_id:
+                return sub_id
+            logger.warning("Client %s has empty subId, falling back to uuid=%s", email, client.get("uuid"))
+            return client.get("uuid", "")
         return ""
 
     def get_sub_url(self, sub_id: str) -> str:

@@ -518,7 +518,7 @@ async def pay_with_wallet(callback: CallbackQuery, state: FSMContext, bot: Bot) 
         logger.info("create_user result: email=%s, sub_id=%s", result["email"], result["sub_id"])
         sub_url = sanaei.get_sub_url(result["sub_id"])
         logger.info("sub_url: %s", sub_url)
-        config_text = result["email"]
+        config_text = sub_url
         await OrderService.complete_order(order.id, sub_link=sub_link, config_text=config_text)
         await status_msg.delete()
         link_text = "\n".join(links[:3]) if links else "ندارد"

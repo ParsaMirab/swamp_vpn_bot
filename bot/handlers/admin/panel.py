@@ -1032,7 +1032,7 @@ async def approve_card_to_card_order(callback: CallbackQuery, state: FSMContext,
         links = await sanaei.get_config(result["email"])
         sub_link = "\n".join(links) if links else ""
         sub_url = sanaei.get_sub_url(result["sub_id"])
-        config_text = result["email"]
+        config_text = sub_url
         await OrderService.complete_order(order.id, sub_link=sub_link, config_text=config_text)
 
         if status_msg:
