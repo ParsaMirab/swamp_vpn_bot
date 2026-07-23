@@ -320,13 +320,22 @@ class SanaeiService:
         return None
 
     async def get_client_sub_id(self, email: str) -> str:
-        client = await self.get_client_by_email(email)
-        if client:
-            sub_id = client.get("subId", "")
-            if sub_id:
-                return sub_id
-            logger.warning("Client %s has empty subId, falling back to uuid=%s", email, client.get("uuid"))
-            return client.get("uuid", "")
+        """Get client subId using /panel/api/clients/list (which includes subId)."""
+        try:
+            data = await asyncio.to_thread(
+                self._request, "GET", "/panel/api/clients/list"
+            )
+            if data.get("success"):
+                for client in data.get("obj", []):
+                    if client.get("email") == email:
+                        sub_id = client.get("subId", "")
+                        if sub_id:
+                            return sub_id
+                        logger.warning("Client %s has empty subId, falling back to uuid=%s", email, client.get("uuid"))
+                        return client.get("uuid", "")
+            logger.warning("Client %s not found in clients list", email)
+        except Exception as e:
+            logger.warning("get_client_sub_id failed for %s: %s", email, e)
         return ""
 
     def get_sub_url(self, sub_id: str) -> str:

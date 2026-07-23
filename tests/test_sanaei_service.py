@@ -35,12 +35,20 @@ def _capture_payload():
 
 
 def _create_user_with_client_mock(sub_id="test-sub-id-123"):
-    """Create a mock that handles both create_user and get_client calls."""
+    """Create a mock that handles both create_user and clients/list calls."""
+    created_email = {"value": None}
+
     def side_effect(method, path, headers=None, verify=False, timeout=None, **kwargs):
         if "/panel/api/clients/add" in path:
+            payload = kwargs.get("json", {})
+            created_email["value"] = payload.get("client", {}).get("email", "")
             return _mock_response({"success": True, "msg": "Client added", "obj": {}})
-        elif "/panel/api/clients/get/" in path:
-            return _mock_response({"success": True, "obj": {"subId": sub_id}})
+        elif path.endswith("/panel/api/clients/list"):
+            email = created_email["value"]
+            return _mock_response({
+                "success": True,
+                "obj": [{"email": email, "subId": sub_id}] if email else [],
+            })
         return _mock_response({"success": True, "obj": {}})
 
     return side_effect
@@ -431,23 +439,30 @@ class TestCheckStatus:
 class TestGetClientSubId:
     @pytest.mark.asyncio
     async def test_returns_sub_id(self, sanaei_service):
-        resp = _mock_response({"success": True, "obj": {"subId": "abc-123", "uuid": "uuid-456"}})
+        resp = _mock_response({"success": True, "obj": [{"email": "user@email.com", "subId": "abc-123", "uuid": "uuid-456"}]})
         with patch("bot.services.sanaei_service.requests.request", return_value=resp):
             result = await sanaei_service.get_client_sub_id("user@email.com")
         assert result == "abc-123"
 
     @pytest.mark.asyncio
     async def test_falls_back_to_uuid_when_sub_id_empty(self, sanaei_service):
-        resp = _mock_response({"success": True, "obj": {"subId": "", "uuid": "fallback-uuid"}})
+        resp = _mock_response({"success": True, "obj": [{"email": "user@email.com", "subId": "", "uuid": "fallback-uuid"}]})
         with patch("bot.services.sanaei_service.requests.request", return_value=resp):
             result = await sanaei_service.get_client_sub_id("user@email.com")
         assert result == "fallback-uuid"
 
     @pytest.mark.asyncio
     async def test_returns_empty_when_client_not_found(self, sanaei_service):
-        resp = _mock_response({"success": False, "msg": "not found"})
+        resp = _mock_response({"success": True, "obj": [{"email": "other@email.com", "subId": "abc"}]})
         with patch("bot.services.sanaei_service.requests.request", return_value=resp):
             result = await sanaei_service.get_client_sub_id("unknown@email.com")
+        assert result == ""
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_when_api_fails(self, sanaei_service):
+        resp = _mock_response({"success": False, "msg": "auth failed"})
+        with patch("bot.services.sanaei_service.requests.request", return_value=resp):
+            result = await sanaei_service.get_client_sub_id("user@email.com")
         assert result == ""
 
 
