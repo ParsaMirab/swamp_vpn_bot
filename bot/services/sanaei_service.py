@@ -262,8 +262,8 @@ class SanaeiService:
             logger.error("Panel create_user failed: %s", data.get("msg", data))
             raise ValueError(data.get("msg", "خطا در ساخت اکانت کاربر"))
 
-        obj = data.get("obj", {})
-        client_uuid = obj.get("uuid", "") if isinstance(obj, dict) else ""
+        await asyncio.sleep(2)
+        client_uuid = await self.get_client_uuid(email)
         return {"email": email, "inbound_id": inbound_id, "uuid": client_uuid, "raw": data}
 
     async def buy_service(self, user_data: dict, product_data: dict) -> dict:
@@ -302,6 +302,27 @@ class SanaeiService:
         return await asyncio.to_thread(
             self._request, "GET", "/panel/api/server/status"
         )
+
+    async def get_client_by_email(self, email: str) -> dict | None:
+        inbounds = await self.list_inbounds()
+        for inbound in inbounds:
+            settings = inbound.get("settings", "{}")
+            if isinstance(settings, str):
+                try:
+                    settings = json.loads(settings)
+                except json.JSONDecodeError:
+                    continue
+            clients = settings.get("clients", [])
+            for client in clients:
+                if client.get("email") == email:
+                    return client
+        return None
+
+    async def get_client_uuid(self, email: str) -> str:
+        client = await self.get_client_by_email(email)
+        if client:
+            return client.get("uuid", "")
+        return ""
 
     def get_sub_url(self, client_uuid: str) -> str:
         return f"{self.base_url}/sub/{client_uuid}"

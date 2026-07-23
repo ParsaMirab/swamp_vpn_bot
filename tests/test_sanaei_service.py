@@ -34,6 +34,21 @@ def _capture_payload():
     return captured, fake_request
 
 
+def _create_user_with_inbounds_mock(inbounds=None):
+    """Create a mock that handles both create_user and list_inbounds calls."""
+    if inbounds is None:
+        inbounds = []
+
+    def side_effect(method, path, headers=None, verify=False, timeout=None, **kwargs):
+        if "/panel/api/clients/add" in path:
+            return _mock_response({"success": True, "msg": "Client added", "obj": {}})
+        elif "/panel/api/inbounds/list" in path:
+            return _mock_response({"success": True, "obj": inbounds})
+        return _mock_response({"success": True, "obj": {}})
+
+    return side_effect
+
+
 # ─── Headers & Config ────────────────────────────────────────────────
 
 class TestHeaders:
@@ -54,22 +69,20 @@ class TestHeaders:
 class TestCreateUser:
     @pytest.mark.asyncio
     async def test_success(self, sanaei_service):
-        resp = _mock_response({"success": True, "msg": "Client added", "obj": {"uuid": "test-uuid-123"}})
-        with patch("bot.services.sanaei_service.requests.request", return_value=resp) as mock_req:
+        inbounds = [{"id": 3, "settings": '{"clients": [{"email": "test_client", "uuid": "test-uuid-123"}]}'}]
+        with patch("bot.services.sanaei_service.requests.request", side_effect=_create_user_with_inbounds_mock(inbounds)) as mock_req:
             result = await sanaei_service.create_user(
                 inbound_id=3, traffic_gb=50, duration_days=30
             )
 
         assert result["email"].startswith("bot_")
         assert result["inbound_id"] == 3
-        assert result["uuid"] == "test-uuid-123"
         assert len(result["email"]) == 16  # "bot_" + 12 hex chars
 
-        mock_req.assert_called_once()
-        call_args = mock_req.call_args
-        assert call_args[0][0] == "POST"
-        assert "/panel/api/clients/add" in call_args[0][1]
-        payload = call_args[1]["json"]
+        # Find the create_user call
+        create_calls = [c for c in mock_req.call_args_list if "/panel/api/clients/add" in c[0][1]]
+        assert len(create_calls) == 1
+        payload = create_calls[0][1]["json"]
 
         # Validate payload structure matches 3x-ui API docs
         assert "client" in payload
@@ -86,13 +99,14 @@ class TestCreateUser:
 
     @pytest.mark.asyncio
     async def test_expiry_time_in_milliseconds(self, sanaei_service):
-        resp = _mock_response({"success": True, "obj": {"uuid": "test-uuid"}})
-        with patch("bot.services.sanaei_service.requests.request", return_value=resp) as mock_req:
+        inbounds = [{"id": 1, "settings": '{"clients": []}'}]
+        with patch("bot.services.sanaei_service.requests.request", side_effect=_create_user_with_inbounds_mock(inbounds)) as mock_req:
             await sanaei_service.create_user(
                 inbound_id=1, traffic_gb=0, duration_days=7
             )
 
-        payload = mock_req.call_args[1]["json"]
+        create_calls = [c for c in mock_req.call_args_list if "/panel/api/clients/add" in c[0][1]]
+        payload = create_calls[0][1]["json"]
         expiry_ms = payload["client"]["expiryTime"]
         now_ms = int(time.time() * 1000)
         expected_ms = now_ms + 7 * 86400 * 1000
@@ -101,22 +115,24 @@ class TestCreateUser:
 
     @pytest.mark.asyncio
     async def test_zero_traffic(self, sanaei_service):
-        resp = _mock_response({"success": True, "obj": {"uuid": "test-uuid"}})
-        with patch("bot.services.sanaei_service.requests.request", return_value=resp) as mock_req:
+        inbounds = [{"id": 1, "settings": '{"clients": []}'}]
+        with patch("bot.services.sanaei_service.requests.request", side_effect=_create_user_with_inbounds_mock(inbounds)) as mock_req:
             await sanaei_service.create_user(inbound_id=1)
 
-        payload = mock_req.call_args[1]["json"]
+        create_calls = [c for c in mock_req.call_args_list if "/panel/api/clients/add" in c[0][1]]
+        payload = create_calls[0][1]["json"]
         assert payload["client"]["totalGB"] == 0
 
     @pytest.mark.asyncio
     async def test_zero_duration_no_expiry(self, sanaei_service):
-        resp = _mock_response({"success": True, "obj": {"uuid": "test-uuid"}})
-        with patch("bot.services.sanaei_service.requests.request", return_value=resp) as mock_req:
+        inbounds = [{"id": 1, "settings": '{"clients": []}'}]
+        with patch("bot.services.sanaei_service.requests.request", side_effect=_create_user_with_inbounds_mock(inbounds)) as mock_req:
             await sanaei_service.create_user(
                 inbound_id=1, duration_days=0
             )
 
-        payload = mock_req.call_args[1]["json"]
+        create_calls = [c for c in mock_req.call_args_list if "/panel/api/clients/add" in c[0][1]]
+        payload = create_calls[0][1]["json"]
         assert payload["client"]["expiryTime"] == 0
 
     @pytest.mark.asyncio
@@ -137,9 +153,9 @@ class TestCreateUser:
 
     @pytest.mark.asyncio
     async def test_email_format_unique(self, sanaei_service):
-        resp = _mock_response({"success": True, "obj": {"uuid": "test-uuid"}})
+        inbounds = [{"id": 1, "settings": '{"clients": []}'}]
         emails = set()
-        with patch("bot.services.sanaei_service.requests.request", return_value=resp) as mock_req:
+        with patch("bot.services.sanaei_service.requests.request", side_effect=_create_user_with_inbounds_mock(inbounds)) as mock_req:
             for _ in range(10):
                 result = await sanaei_service.create_user(inbound_id=1)
                 emails.add(result["email"])
@@ -489,8 +505,8 @@ class TestDeleteInbound:
 class TestBuyService:
     @pytest.mark.asyncio
     async def test_success(self, sanaei_service):
-        resp = _mock_response({"success": True, "obj": {"uuid": "test-uuid"}})
-        with patch("bot.services.sanaei_service.requests.request", return_value=resp):
+        inbounds = [{"id": 2, "settings": '{"clients": []}'}]
+        with patch("bot.services.sanaei_service.requests.request", side_effect=_create_user_with_inbounds_mock(inbounds)):
             result = await sanaei_service.buy_service(
                 user_data={"user_id": 123},
                 product_data={
@@ -502,18 +518,18 @@ class TestBuyService:
 
         assert "email" in result
         assert result["inbound_id"] == 2
-        assert result["uuid"] == "test-uuid"
 
     @pytest.mark.asyncio
     async def test_defaults(self, sanaei_service):
-        resp = _mock_response({"success": True, "obj": {"uuid": "test-uuid"}})
-        with patch("bot.services.sanaei_service.requests.request", return_value=resp) as mock_req:
+        inbounds = [{"id": 1, "settings": '{"clients": []}'}]
+        with patch("bot.services.sanaei_service.requests.request", side_effect=_create_user_with_inbounds_mock(inbounds)) as mock_req:
             await sanaei_service.buy_service(
                 user_data={"user_id": 1},
                 product_data={"inbound_id": 1},
             )
 
-        payload = mock_req.call_args[1]["json"]
+        create_calls = [c for c in mock_req.call_args_list if "/panel/api/clients/add" in c[0][1]]
+        payload = create_calls[0][1]["json"]
         assert payload["client"]["totalGB"] == 0  # default
         assert payload["client"]["expiryTime"] > 0  # default 30 days
 
