@@ -51,46 +51,39 @@ class SanaeiService:
         if REPLACEMENT_DOMAIN not in link:
             return link
 
-        if link.startswith("vless://") or link.startswith("trojan://"):
-            protocol = "vless" if link.startswith("vless://") else "trojan"
+        iif link.startswith("vless://") or link.startswith("trojan://"):
+             protocol = "vless" if link.startswith("vless://") else "trojan"
 
-            prefix = f"{protocol}://"
-            rest = link[len(prefix):]
+             prefix = f"{protocol}://"
+             rest = link[len(prefix):]
 
-            # Separate fragment
-            fragment = ""
-            if "#" in rest:
-                rest, fragment_part = rest.split("#", 1)
-                fragment = f"#{fragment_part}"
+             fragment = ""
+             if "#" in rest:
+                 rest, fragment_part = rest.split("#", 1)
+                 fragment = f"#{fragment_part}"
 
-            # Separate query
-            query = ""
-            if "?" in rest:
-                rest, query_part = rest.split("?", 1)
-                query = f"?{query_part}"
+             query = ""
+             if "?" in rest:
+                 rest, query_part = rest.split("?", 1)
+                 query = f"?{query_part}"
 
-            # Separate user info from host:port
-            if "@" in rest:
-                user_info, host_port = rest.rsplit("@", 1)
+             if "@" not in rest:
+                 return link
 
-                # Replace only the hostname, preserving the port
-                if host_port.startswith(f"{REPLACEMENT_DOMAIN}:"):
-                    host_port = host_port.replace(
-                        REPLACEMENT_DOMAIN,
-                        REPLACEMENT_IP,
-                        1,
-                    )
-                elif host_port == REPLACEMENT_DOMAIN:
-                    host_port = REPLACEMENT_IP
+             user_info, host_port = rest.rsplit("@", 1)
 
-                return (
-                    f"{prefix}"
-                    f"{user_info}@{host_port}"
-                    f"{query}"
-                    f"{fragment}"
-                )
+             if ":" in host_port:
+                 current_host, port = host_port.split(":", 1)
+                 new_host_port = f"{REPLACEMENT_IP}:{port}"
+             else:
+                 new_host_port = REPLACEMENT_IP
 
-            return link
+             return (
+                 f"{prefix}"
+                 f"{user_info}@{new_host_port}"
+                 f"{query}"
+                 f"{fragment}"
+             )
 
         if link.startswith("ss://"):
             rest = link[len("ss://"):]
