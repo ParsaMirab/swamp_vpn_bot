@@ -51,7 +51,7 @@ class SanaeiService:
         if REPLACEMENT_DOMAIN not in link:
             return link
 
-        iif link.startswith("vless://") or link.startswith("trojan://"):
+        if link.startswith("vless://") or link.startswith("trojan://"):
              protocol = "vless" if link.startswith("vless://") else "trojan"
 
              prefix = f"{protocol}://"
