@@ -16,8 +16,8 @@ logger = logging.getLogger(__name__)
 LINKS_TIMEOUT = 60
 DEFAULT_TIMEOUT = 30
 
-REPLACEMENT_DOMAIN = "swamp.nicebrovip.xyz"
-REPLACEMENT_IP = "144.31.157.131"
+REPLACEMENT_DOMAIN = "relaxed.nicebrovip.xyz"
+REPLACEMENT_IP = "94.156.112.11"
 
 
 class SanaeiService:
