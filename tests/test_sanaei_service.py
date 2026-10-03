@@ -274,12 +274,14 @@ class TestCreateInbound:
 class TestGetConfig:
     @pytest.mark.asyncio
     async def test_success(self, sanaei_service):
-        links = ["vless://abc@test.com:443", "vmess://xyz@test.com:443"]
+        links = ["vless://abc@test.com:443", "vless://def@2.27.22.238:110?type=tcp#x"]
         resp = _mock_response({"success": True, "obj": links})
         with patch("bot.services.sanaei_service.requests.request", return_value=resp) as mock_req:
             result = await sanaei_service.get_config("user@email.com")
 
-        assert result == links
+        # The host is always rewritten to the correct replacement IP
+        assert result[0] == "vless://abc@94.156.112.11:443"
+        assert result[1] == "vless://def@94.156.112.11:110?type=tcp#x"
         mock_req.assert_called_once()
         assert "/panel/api/clients/links/user@email.com" in mock_req.call_args[0][1]
 

@@ -37,19 +37,14 @@ class SanaeiService:
                 padded = raw + "=" * (-len(raw) % 4)
                 decoded = base64.b64decode(padded).decode("utf-8")
                 config = json.loads(decoded)
-                addr = config.get("add", "")
-                if addr == REPLACEMENT_DOMAIN:
-                    config["add"] = REPLACEMENT_IP
-                elif addr == f"https://{REPLACEMENT_DOMAIN}" or addr == f"http://{REPLACEMENT_DOMAIN}":
+                # The panel often returns the wrong host/IP; always rewrite it.
+                if config.get("add"):
                     config["add"] = REPLACEMENT_IP
                 json_str = json.dumps(config, separators=(",", ":"))
                 encoded = base64.b64encode(json_str.encode("utf-8")).decode("utf-8").rstrip("=")
                 return f"vmess://{encoded}"
             except Exception:
                 return link
-
-        if REPLACEMENT_DOMAIN not in link:
-            return link
 
         if link.startswith("vless://") or link.startswith("trojan://"):
             protocol = "vless" if link.startswith("vless://") else "trojan"
@@ -75,18 +70,11 @@ class SanaeiService:
 
             user_info, host_port = rest.rsplit("@", 1)
 
-            # Separate host and port
+            # Separate host and port; always rewrite the host to the correct IP
             if ":" in host_port:
-                current_host, port = host_port.rsplit(":", 1)
-
-                if current_host.lower() != REPLACEMENT_DOMAIN.lower():
-                    return link
-
+                _, port = host_port.rsplit(":", 1)
                 new_host_port = f"{REPLACEMENT_IP}:{port}"
             else:
-                if host_port.lower() != REPLACEMENT_DOMAIN.lower():
-                    return link
-
                 new_host_port = REPLACEMENT_IP
 
             return (
@@ -100,13 +88,24 @@ class SanaeiService:
             rest = link[len("ss://"):]
             if "@" in rest:
                 encoded_part, after_at = rest.split("@", 1)
+
+                fragment = ""
+                if "#" in after_at:
+                    after_at, fragment_part = after_at.split("#", 1)
+                    fragment = f"#{fragment_part}"
+
+                query = ""
+                if "?" in after_at:
+                    after_at, query_part = after_at.split("?", 1)
+                    query = f"?{query_part}"
+
                 if ":" in after_at:
-                    host_port, query_fragment = after_at.split(":", 1)
-                    domain_part = host_port.split("?")[0] if "?" in host_port else host_port.split("#")[0] if "#" in host_port else host_port
-                    if domain_part == REPLACEMENT_DOMAIN:
-                        new_host_port = host_port.replace(REPLACEMENT_DOMAIN, REPLACEMENT_IP, 1)
-                        new_after_at = new_host_port + after_at[len(host_port):]
-                        return f"ss://{encoded_part}@{new_after_at}"
+                    _, port = after_at.rsplit(":", 1)
+                    new_after_at = f"{REPLACEMENT_IP}:{port}"
+                else:
+                    new_after_at = REPLACEMENT_IP
+
+                return f"ss://{encoded_part}@{new_after_at}{query}{fragment}"
             return link
 
         if link.startswith("hysteria2://") or link.startswith("hy2://"):
@@ -114,13 +113,24 @@ class SanaeiService:
             rest = link[len(f"{protocol}://"):]
             if "@" in rest:
                 auth_part, after_at = rest.split("@", 1)
+
+                fragment = ""
+                if "#" in after_at:
+                    after_at, fragment_part = after_at.split("#", 1)
+                    fragment = f"#{fragment_part}"
+
+                query = ""
+                if "?" in after_at:
+                    after_at, query_part = after_at.split("?", 1)
+                    query = f"?{query_part}"
+
                 if ":" in after_at:
-                    host_port, query_fragment = after_at.split(":", 1)
-                    domain_part = host_port.split("?")[0] if "?" in host_port else host_port.split("#")[0] if "#" in host_port else host_port
-                    if domain_part == REPLACEMENT_DOMAIN:
-                        new_host_port = host_port.replace(REPLACEMENT_DOMAIN, REPLACEMENT_IP, 1)
-                        new_after_at = new_host_port + after_at[len(host_port):]
-                        return f"{protocol}://{auth_part}@{new_after_at}"
+                    _, port = after_at.rsplit(":", 1)
+                    new_after_at = f"{REPLACEMENT_IP}:{port}"
+                else:
+                    new_after_at = REPLACEMENT_IP
+
+                return f"{protocol}://{auth_part}@{new_after_at}{query}{fragment}"
             return link
 
         return link
