@@ -53,16 +53,43 @@ class SanaeiService:
 
         if link.startswith("vless://") or link.startswith("trojan://"):
             protocol = "vless" if link.startswith("vless://") else "trojan"
-            rest = link[len(f"{protocol}://"):]
+
+            prefix = f"{protocol}://"
+            rest = link[len(prefix):]
+
+            # Separate fragment
+            fragment = ""
+            if "#" in rest:
+                rest, fragment_part = rest.split("#", 1)
+                fragment = f"#{fragment_part}"
+
+            # Separate query
+            query = ""
+            if "?" in rest:
+                rest, query_part = rest.split("?", 1)
+                query = f"?{query_part}"
+
+            # Separate user info from host:port
             if "@" in rest:
-                uuid_part, after_at = rest.split("@", 1)
-                if ":" in after_at:
-                    host_port, query_fragment = after_at.split(":", 1)
-                    domain_part = host_port.split("?")[0] if "?" in host_port else host_port.split("#")[0] if "#" in host_port else host_port
-                    if domain_part == REPLACEMENT_DOMAIN:
-                        new_host_port = host_port.replace(REPLACEMENT_DOMAIN, REPLACEMENT_IP, 1)
-                        new_after_at = new_host_port + after_at[len(host_port):]
-                        return f"{protocol}://{uuid_part}@{new_after_at}"
+                user_info, host_port = rest.rsplit("@", 1)
+
+                # Replace only the hostname, preserving the port
+                if host_port.startswith(f"{REPLACEMENT_DOMAIN}:"):
+                    host_port = host_port.replace(
+                        REPLACEMENT_DOMAIN,
+                        REPLACEMENT_IP,
+                        1,
+                    )
+                elif host_port == REPLACEMENT_DOMAIN:
+                    host_port = REPLACEMENT_IP
+
+                return (
+                    f"{prefix}"
+                    f"{user_info}@{host_port}"
+                    f"{query}"
+                    f"{fragment}"
+                )
+
             return link
 
         if link.startswith("ss://"):
