@@ -1,0 +1,13 @@
+[0;1;32m●[0m swamp-bot.service - Swamp VPN Telegram Bot
+     Loaded: loaded (]8;;file://srv5335368842/etc/systemd/system/swamp-bot.service/etc/systemd/system/swamp-bot.service]8;;; [0;1;32menabled[0m; preset: [0;1;32menabled[0m)
+     Active: [0;1;32mactive (running)[0m since Mon 2026-06-01 14:11:20 UTC; 5s ago
+   Main PID: 10092 (python)
+      Tasks: 3 (limit: 2315)
+     Memory: 99.7M (peak: 100.0M)
+        CPU: 1.900s
+     CGroup: /system.slice/swamp-bot.service
+             └─[0;38;5;245m10092 /root/swamp_vpn_bot/venv/bin/python /root/swamp_vpn_bot/bot.py[0m
+
+Jun 01 14:11:20 srv5335368842 systemd[1]: Started swamp-bot.service - Swamp VPN Telegram Bot.
+Jun 01 14:11:22 srv5335368842 python[10092]: INFO:aiogram.dispatcher:Start polling
+Jun 01 14:11:22 srv5335368842 python[10092]: INFO:aiogram.dispatcher:Run polling for bot @Swampvpn_bot id=8611167148 - 'Swamp'
